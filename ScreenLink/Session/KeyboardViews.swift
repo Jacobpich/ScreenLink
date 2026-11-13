@@ -1,35 +1,73 @@
 import UIKit
 
 /// Invisible first responder that captures typing from the on-screen keyboard.
-final class KeyInputView: UIView, UIKeyInput {
+///
+/// It's a text view (rather than a bare UIKeyInput view) because iOS only auto-repeats the
+/// delete key for real text views. The view keeps a few placeholder characters so there's
+/// always "something to delete", and never actually changes: every keystroke is forwarded.
+final class KeyInputView: UITextView, UITextViewDelegate {
     var onText: ((String) -> Void)?
     var onBackspace: (() -> Void)?
     var onPresses: ((Set<UIPress>, Bool) -> Bool)?
 
-    private var accessory: UIView?
-    override var inputAccessoryView: UIView? {
-        get { accessory }
-        set { accessory = newValue }
+    private static let placeholder = String(repeating: "\u{2007}", count: 8)   // figure spaces
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 1, height: 1), textContainer: nil)
+        text = Self.placeholder
+        delegate = self
+        autocorrectionType = .no
+        autocapitalizationType = .none
+        spellCheckingType = .no
+        smartQuotesType = .no
+        smartDashesType = .no
+        smartInsertDeleteType = .no
+        inlinePredictionType = .no
+        keyboardType = .asciiCapable
+        keyboardAppearance = .dark
+        returnKeyType = .default
+        textColor = .clear
+        tintColor = .clear
+        backgroundColor = .clear
+        isScrollEnabled = false
+        isSelectable = true
+        isEditable = true
+        resetCaret()
     }
 
-    override var canBecomeFirstResponder: Bool { true }
-    var hasText: Bool { true }   // so backspace always fires
+    required init?(coder: NSCoder) { fatalError() }
+
     override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool { false }
+    override func caretRect(for position: UITextPosition) -> CGRect { .zero }
 
-    func insertText(_ text: String) { onText?(text) }
-    func deleteBackward() { onBackspace?() }
+    override func insertText(_ text: String) { onText?(text) }
+    override func deleteBackward() { onBackspace?() }
 
-    // UITextInputTraits
-    var autocorrectionType: UITextAutocorrectionType = .no
-    var autocapitalizationType: UITextAutocapitalizationType = .none
-    var spellCheckingType: UITextSpellCheckingType = .no
-    var smartQuotesType: UITextSmartQuotesType = .no
-    var smartDashesType: UITextSmartDashesType = .no
-    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
-    var keyboardType: UIKeyboardType = .asciiCapable
-    var keyboardAppearance: UIKeyboardAppearance = .dark
-    var returnKeyType: UIReturnKeyType = .default
-    var inlinePredictionType: UITextInlinePredictionType = .no
+    // Anything that reaches the text by another route (word-delete when holding ⌫ for a
+    // while, keyboard shortcuts, dictation) is forwarded here instead of being applied.
+    func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        for _ in 0..<max(text.isEmpty ? 1 : 0, range.length) { onBackspace?() }
+        if !text.isEmpty { onText?(text) }
+        restore()
+        return false
+    }
+
+    func textViewDidChange(_ textView: UITextView) { restore() }
+
+    private func restore() {
+        if text != Self.placeholder { text = Self.placeholder }
+        resetCaret()
+    }
+
+    private func resetCaret() {
+        selectedRange = NSRange(location: (text as NSString).length, length: 0)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        restore()
+        return super.becomeFirstResponder()
+    }
 
     // Hardware keyboard: handle raw key presses so modifiers and shortcuts work.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {

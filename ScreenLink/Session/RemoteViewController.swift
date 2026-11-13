@@ -60,6 +60,8 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
     private var lastDrag = CGPoint.zero
     private var scrollAccum = CGPoint.zero
     private var pressedKeys: [Int: UInt32] = [:]
+    private var repeatTimer: Timer?
+    private var repeatCode: Int?
 
     // Momentum (scroll + viewport pan)
     private var scrollVelocity = CGPoint.zero
@@ -1121,9 +1123,10 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
             let sym: UInt32?
             if down {
                 sym = Keysym.forKey(key)
-                if let sym { pressedKeys[code] = sym }
+                if let sym { pressedKeys[code] = sym; startKeyRepeat(code: code, sym: sym) }
             } else {
                 sym = pressedKeys.removeValue(forKey: code) ?? Keysym.forKey(key)
+                if code == repeatCode { stopKeyRepeat() }
             }
             if let sym {
                 handled = true
@@ -1131,6 +1134,31 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
             }
         }
         return handled
+    }
+
+    /// The Mac doesn't auto-repeat keys held on a remote keyboard (a real Mac client sends
+    /// the repeats itself), so repeat held hardware keys here: the latest non-modifier key,
+    /// after a short delay, like macOS's default key repeat.
+    private func startKeyRepeat(code: Int, sym: UInt32) {
+        stopKeyRepeat()
+        guard !(0xffe1...0xffee).contains(sym) else { return }   // modifiers don't repeat
+        repeatCode = code
+        repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) { [weak self] _ in
+            guard let self, self.repeatCode == code else { return }
+            self.repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.035, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                guard self.repeatCode == code, self.pressedKeys[code] == sym, let c = self.connection else {
+                    self.stopKeyRepeat(); return
+                }
+                self.inputQueue.async { c.key(sym, down: true) }
+            }
+        }
+    }
+
+    private func stopKeyRepeat() {
+        repeatTimer?.invalidate()
+        repeatTimer = nil
+        repeatCode = nil
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
