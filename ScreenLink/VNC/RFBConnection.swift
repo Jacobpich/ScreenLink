@@ -257,12 +257,20 @@ final class RFBConnection {
         }
     }
 
+    // Until a complete picture has arrived we keep asking for the full screen (non-incremental).
+    // macOS may answer the first request with only the cursor and screen layout and no pixels;
+    // asking for changes after that would leave the screen black until something moved.
+    private var fullFramePending = true
+    private var fullFrameArea = 0
+
     private func readFramebufferUpdate() throws {
         _ = try socket.readU8()
         let n = Int(try socket.readU16())
         var dirty: [CGRect] = []
         var resized = false
         var coversPing = false
+        let logThis = framesReceived < 6
+        var encs: [Int32: Int] = [:]
 
         for _ in 0..<n {
             let x = Int(try socket.readU16())
@@ -270,6 +278,7 @@ final class RFBConnection {
             let w = Int(try socket.readU16())
             let h = Int(try socket.readU16())
             let enc = try socket.readS32()
+            if logThis { encs[enc, default: 0] += 1 }
 
             switch enc {
             case Encoding.raw: try decoder.raw(x: x, y: y, w: w, h: h)
@@ -288,6 +297,8 @@ final class RFBConnection {
                 framebuffer = fb
                 decoder.fb = fb
                 resized = true
+                fullFramePending = true
+                fullFrameArea = 0
                 delegate?.rfbDidResize(self, framebuffer: fb)
                 continue
             case Encoding.extendedDesktopSize:
@@ -299,11 +310,14 @@ final class RFBConnection {
                     func u16(_ i: Int) -> Int { Int(b[i]) << 8 | Int(b[i + 1]) }
                     screens.append(CGRect(x: u16(4), y: u16(6), width: u16(8), height: u16(10)))
                 }
+                ConnLog.write("extended desktop size \(w)x\(h) screens \(screens.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" })")
                 if let fb = framebuffer, fb.width != w || fb.height != h, w > 0, h > 0 {
                     let nfb = Framebuffer(width: w, height: h)
                     framebuffer = nfb
                     decoder.fb = nfb
                     resized = true
+                    fullFramePending = true
+                    fullFrameArea = 0
                     delegate?.rfbDidResize(self, framebuffer: nfb)
                 }
                 delegate?.rfb(self, screens: screens)
@@ -315,9 +329,14 @@ final class RFBConnection {
             }
             if enc == Encoding.lastRect { break }
             dirty.append(CGRect(x: x, y: y, width: w, height: h))
+            if fullFramePending { fullFrameArea += w * h }
             if pingPoint.x >= x && pingPoint.x < x + w && pingPoint.y >= y && pingPoint.y < y + h { coversPing = true }
         }
 
+        if logThis {
+            let area = dirty.reduce(0) { $0 + Int($1.width * $1.height) }
+            ConnLog.write("update #\(framesReceived + 1): \(n) rects, encodings \(encs.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }), pixels \(area)\(resized ? ", resized" : "")")
+        }
         lastRoundTrip = CFAbsoluteTimeGetCurrent() - lastRequest
         framesReceived += 1
         if coversPing {
@@ -333,7 +352,11 @@ final class RFBConnection {
         // Only ask for the next frame once this one is fully read. This is the protocol's flow
         // control: the Mac never has more than one frame queued for us, so it can't get stuck
         // waiting on a slow phone (which would freeze Screen Sharing for every viewer).
-        requestUpdate(incremental: !resized)
+        if fullFramePending, let fb = framebuffer, fullFrameArea >= fb.width * fb.height {
+            fullFramePending = false
+            ConnLog.write("full picture received after \(framesReceived) updates")
+        }
+        requestUpdate(incremental: !fullFramePending)
         if let fb = framebuffer {
             if resized { dirty = [CGRect(x: 0, y: 0, width: fb.width, height: fb.height)] }
             if !dirty.isEmpty { delegate?.rfb(self, didUpdate: fb, dirty: dirty) }

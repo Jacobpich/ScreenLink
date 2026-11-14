@@ -83,6 +83,7 @@ final class ScreenRenderer: NSObject, MTKViewDelegate {
             d.usage = [.shaderRead]
             d.storageMode = .shared
             texture = device.makeTexture(descriptor: d)
+            ConnLog.write("texture \(fb.width)x\(fb.height) \(texture == nil ? "FAILED" : "ok") (max \(device.supportsFamily(.apple3) ? 16384 : 8192))")
             full = true
         }
         guard let tex = texture else { return }

@@ -1,6 +1,7 @@
 # Live mock desktop: 2560x1440, no auth. Draws a marker where the pointer is.
 import socket, struct, zlib, threading, math, sys
 DUAL = "--dual" in sys.argv
+MACLIKE = "--maclike" in sys.argv
 # Single: one 2560x1440 display. Dual: adds a 1920x1080 display to the right,
 # vertically centred, with black filler above/below (as macOS does).
 W,H=(2560+1920,1440) if DUAL else (2560,1440)
@@ -93,8 +94,15 @@ def serve(s):
                 s.sendall(struct.pack(">BBH",0,0,1)+send_rect(rx,ry,1,1))
             if first[0]:
                 first[0]=False
-                rects=[send_rect(0,0,W,H), arrow]
-                s.sendall(struct.pack(">BBH",0,0,len(rects))+b"".join(rects))
+                if MACLIKE:
+                    # Like macOS: the first reply can carry only the cursor, no pixels.
+                    s.sendall(struct.pack(">BBH",0,0,1)+arrow)
+                else:
+                    rects=[send_rect(0,0,W,H), arrow]
+                    s.sendall(struct.pack(">BBH",0,0,len(rects))+b"".join(rects))
+            elif MACLIKE and not inc and rw*rh>1:
+                print("full frame requested",flush=True)
+                s.sendall(struct.pack(">BBH",0,0,1)+send_rect(0,0,W,H))
         elif t==4: m=rd(7); print("key",m[0],hex(struct.unpack(">I",m[3:])[0]),flush=True)
         elif t==5:
             m=rd(5); btn=m[0]; x,y=struct.unpack(">HH",m[1:])
@@ -108,7 +116,7 @@ def serve(s):
                 rect(rx,ry,24,24,(255,60,60) if btn&1 else (60,60,255))
                 s.sendall(struct.pack(">BBH",0,0,1)+send_rect(rx,ry,24,24))
         elif t==6: l=struct.unpack(">I",rd(7)[3:])[0]; print("cut",rd(l),flush=True)
-srv=socket.socket(); srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); srv.bind(("127.0.0.1",5998 if DUAL else 5999)); srv.listen(4)
+srv=socket.socket(); srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); srv.bind(("127.0.0.1",5996 if MACLIKE else 5998 if DUAL else 5999)); srv.listen(4)
 print("listening",flush=True)
 while True:
     c,_=srv.accept()
