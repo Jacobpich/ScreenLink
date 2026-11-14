@@ -88,6 +88,7 @@ final class HostStore: ObservableObject {
         let id = host.id
         Task.detached(priority: .utility) {
             let ok = TCPSocket.probe(host: addr, port: port, timeout: 2.5)
+            ConnLog.write("probe \(addr):\(port) \(ok ? "reachable" : "NOT reachable")")
             await MainActor.run { HostStore.shared.reachability[id] = ok }
         }
     }

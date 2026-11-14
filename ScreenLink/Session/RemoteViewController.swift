@@ -5,8 +5,8 @@ import Combine
 
 /// Full-screen remote session: Metal screen, gestures, keyboard and toolbar.
 final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGestureRecognizerDelegate {
-    private let host: SavedHost
-    private let password: String
+    private var host: SavedHost
+    private var password: String
     let model: SessionModel
 
     private var connection: RFBConnection?
@@ -211,6 +211,17 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
         c.start()
     }
 
+    /// Retry with new credentials from the sign-in card, saving them for next time.
+    func signIn(username: String, password newPassword: String) {
+        host.username = username.trimmingCharacters(in: .whitespaces)
+        password = newPassword
+        if HostStore.shared.hosts.contains(where: { $0.id == host.id }) {
+            HostStore.shared.upsert(host, password: newPassword)
+        }
+        retryCount = 0
+        connect()
+    }
+
     func disconnect() {
         closing = true
         stopMomentum()
@@ -316,6 +327,10 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
                     guard let self, !self.closing, self.connection == nil else { return }
                     self.connect()
                 }
+            } else if isAuth {
+                // Usually a changed Mac password: ask for it right here instead of a dead end.
+                self.model.signInUser = self.host.username
+                self.model.state = .signIn(error?.localizedDescription ?? "Sign-in failed.")
             } else {
                 self.model.state = .failed(error?.localizedDescription ?? "Disconnected.")
             }

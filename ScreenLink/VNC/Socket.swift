@@ -49,7 +49,10 @@ final class TCPSocket {
         hints.ai_protocol = IPPROTO_TCP
         var res: UnsafeMutablePointer<addrinfo>?
         let rc = getaddrinfo(host, String(port), &hints, &res)
-        guard rc == 0, let first = res else { throw SocketError.resolve(host) }
+        guard rc == 0, let first = res else {
+            ConnLog.write("resolve \(host) failed: \(String(cString: gai_strerror(rc)))")
+            throw SocketError.resolve(host)
+        }
         defer { freeaddrinfo(res) }
 
         var lastError: Error = SocketError.connect("no addresses")
@@ -77,6 +80,7 @@ final class TCPSocket {
                     var len = socklen_t(MemoryLayout<Int32>.size)
                     getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &len)
                     if err == 0 {
+                        ConnLog.write("tcp connected \(Self.describe(a.pointee.ai_addr)):\(port)")
                         _ = fcntl(s, F_SETFL, flags & ~O_NONBLOCK)
                         // Report "writable" only while little is waiting to go out, so the
                         // sender can tell when the Mac (or network) is falling behind.
@@ -86,11 +90,14 @@ final class TCPSocket {
                         return
                     }
                     lastError = SocketError.connect(String(cString: strerror(err)))
+                    ConnLog.write("tcp \(Self.describe(a.pointee.ai_addr)):\(port) error: \(String(cString: strerror(err)))")
                 } else {
                     lastError = SocketError.timeout
+                    ConnLog.write("tcp \(Self.describe(a.pointee.ai_addr)):\(port) timed out")
                 }
             } else {
                 lastError = SocketError.connect(String(cString: strerror(errno)))
+                ConnLog.write("tcp \(Self.describe(a.pointee.ai_addr)):\(port) error: \(String(cString: strerror(errno)))")
             }
             Darwin.close(s)
         }
@@ -214,6 +221,13 @@ final class TCPSocket {
                 else { throw SocketError.io("Send failed: \(String(cString: strerror(errno)))") }
             }
         }
+    }
+
+    static func describe(_ sa: UnsafeMutablePointer<sockaddr>?) -> String {
+        guard let sa else { return "?" }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+        return String(cString: host)
     }
 
     /// Quick reachability probe used by the host list.

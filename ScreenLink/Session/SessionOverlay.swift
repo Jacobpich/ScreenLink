@@ -12,6 +12,7 @@ enum SessionState: Equatable {
     case connected
     case paused
     case failed(String)
+    case signIn(String)       // the Mac rejected the username/password
 }
 
 @MainActor
@@ -27,6 +28,7 @@ final class SessionModel: ObservableObject {
     @Published var displays: [CGRect] = []
     @Published var selectedDisplay: Int?
     @Published var displayLayoutIsManual = false
+    @Published var signInUser = ""
 
     weak var controller: RemoteViewController?
     let hostName: String
@@ -278,6 +280,8 @@ struct SessionOverlay: View {
             .frame(maxWidth: 340)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
             .padding()
+        case .signIn(let message):
+            SignInCard(model: model, message: message)
         case .connected:
             EmptyView()
         }
@@ -322,5 +326,58 @@ struct SessionOverlay: View {
             Image(systemName: icon).frame(width: 26).foregroundStyle(.tint)
             Text(text).font(.subheadline)
         }
+    }
+}
+
+/// Shown when the Mac rejects the saved credentials (for example after a password change).
+private struct SignInCard: View {
+    @ObservedObject var model: SessionModel
+    let message: String
+    @State private var user = ""
+    @State private var password = ""
+    @FocusState private var focus: Field?
+    private enum Field { case user, password }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "lock.fill").font(.system(size: 30)).foregroundStyle(.yellow)
+            Text("Sign In to \(model.hostName)").font(.headline)
+            Text("The Mac didn't accept the saved password. If you changed your Mac's password, enter the new one.")
+                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            TextField("Mac username", text: $user)
+                .textContentType(.username)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focus, equals: .user)
+                .submitLabel(.next)
+                .onSubmit { focus = .password }
+                .textFieldStyle(.roundedBorder)
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .focused($focus, equals: .password)
+                .submitLabel(.go)
+                .onSubmit(submit)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Close") { model.controller?.disconnect() }.buttonStyle(.bordered)
+                Button("Sign In", action: submit)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(user.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
+            }
+            .padding(.top, 4)
+        }
+        .padding(24)
+        .frame(maxWidth: 340)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+        .padding()
+        .onAppear {
+            user = model.signInUser
+            focus = user.isEmpty ? .user : .password
+        }
+    }
+
+    private func submit() {
+        guard !user.trimmingCharacters(in: .whitespaces).isEmpty, !password.isEmpty else { return }
+        model.controller?.signIn(username: user, password: password)
     }
 }

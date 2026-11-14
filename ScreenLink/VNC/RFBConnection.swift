@@ -107,6 +107,7 @@ final class RFBConnection {
 
     private func run() {
         do {
+            ConnLog.write("connect \(config.host):\(config.port) user=\(config.username.isEmpty ? "-" : "set")")
             try socket.connect(host: config.host, port: config.port, timeout: 10)
             try handshake()
             while !stopped {
@@ -117,6 +118,7 @@ final class RFBConnection {
             stopped = true
             out.lock(); out.broadcast(); out.unlock()
             socket.close()
+            ConnLog.write("session ended\(wasStopped ? " (closed by app)" : ""): \((stallError ?? error).localizedDescription) [\(error)]")
             if !wasStopped { delegate?.rfb(self, didFail: stallError ?? error) }
         }
     }
@@ -124,6 +126,7 @@ final class RFBConnection {
     private func handshake() throws {
         let versionBytes = try socket.readBytes(12)
         let version = String(bytes: versionBytes, encoding: .ascii) ?? ""
+        ConnLog.write("server version \(version.trimmingCharacters(in: .whitespacesAndNewlines))")
         guard version.hasPrefix("RFB ") else { throw SocketError.io("Not a Screen Sharing server (\(version.trimmingCharacters(in: .whitespacesAndNewlines))).") }
         // macOS reports "RFB 003.889"; we speak 3.8.
         try socket.write(Array("RFB 003.008\n".utf8))
@@ -135,6 +138,7 @@ final class RFBConnection {
             throw AuthError.failed(reason)
         }
         let types = try socket.readBytes(count)
+        ConnLog.write("security types \(types)")
 
         let hasUser = !config.username.isEmpty
         let choice: UInt8
@@ -164,6 +168,7 @@ final class RFBConnection {
         }
 
         let result = try socket.readU32()
+        ConnLog.write("auth type \(choice) result \(result)")
         if result != 0 {
             var reason = ""
             if let len = try? socket.readU32(), len < 4096,
@@ -181,6 +186,7 @@ final class RFBConnection {
         _ = try socket.readBytes(16) // server pixel format; we override it below
         let nameLen = Int(try socket.readU32())
         let name = String(bytes: try socket.readBytes(nameLen), encoding: .utf8) ?? config.host
+        ConnLog.write("connected to \(name) \(w)x\(h)")
 
         let fb = Framebuffer(width: w, height: h)
         framebuffer = fb
@@ -542,6 +548,7 @@ final class RFBConnection {
             }
         } else if let p = probeTime, now - p > 6 {
             stallError = SocketError.io("The Mac stopped responding.")
+            ConnLog.write("watchdog: no data for \(Int(now - lastProgressTime))s, closing")
             socket.close()
         }
     }
