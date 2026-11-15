@@ -12,7 +12,7 @@ let package = Package(
             path: ".",
             exclude: ["build", "Receiver", "Tools", "Downloads", "ScreenLink.xcodeproj", "Info.plist", "README.md",
                       "ScreenLink/App", "ScreenLink/Views", "ScreenLink/Assets.xcassets",
-                      "ScreenLink/Models/TailscaleAPI.swift", "ScreenLink/Session/DisplayDetector.swift",
+                      "ScreenLink/Models/TailscaleAPI.swift",
                       "ScreenLink/Session/KeyboardViews.swift", "ScreenLink/Session/RemoteViewController.swift",
                       "ScreenLink/Session/SessionOverlay.swift", "Mac/build.sh", "Mac/Info.plist"],
             sources: [
@@ -21,6 +21,7 @@ let package = Package(
                 "ScreenLink/Models/ConnLog.swift",
                 "ScreenLink/Models/HostStore.swift",
                 "ScreenLink/Session/ScreenRenderer.swift",
+                "ScreenLink/Session/DisplayDetector.swift",
             ],
             linkerSettings: [.linkedLibrary("z")]
         ),

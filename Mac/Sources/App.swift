@@ -83,10 +83,7 @@ struct ComputerCommands: Commands {
             Button("Disconnect") { SessionController.current?.window?.performClose(nil) }
         }
         CommandMenu("Displays") {
-            Button("All Displays") { SessionController.current?.showDisplay(nil) }
-            ForEach(0..<6, id: \.self) { i in
-                Button("Display \(i + 1)") { SessionController.current?.showDisplay(i) }
-            }
+            DisplaysMenuContent()
         }
     }
 }

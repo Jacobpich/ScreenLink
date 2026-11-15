@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -228,6 +229,7 @@ type session struct {
 	mu          sync.Mutex
 	pf          pixelFormat
 	zrle        bool
+	copyRect    bool
 	cursorEnc   bool
 	extDesktop  bool
 	desktopSize bool
@@ -235,9 +237,10 @@ type session struct {
 	full        *Rect // area requested non-incrementally (union)
 	wake        chan struct{}
 
-	buttons uint8
-	lastX   int
-	lastY   int
+	buttons   uint8
+	lastX     int
+	lastY     int
+	lastInput atomic.Int64 // UnixNano of the viewer's last key/pointer event
 
 	// Encoder state (update goroutine only)
 	fbW, fbH    int
@@ -339,11 +342,13 @@ func (ss *session) readLoop() error {
 				return err
 			}
 			ss.mu.Lock()
-			ss.zrle, ss.cursorEnc, ss.extDesktop, ss.desktopSize = false, false, false, false
+			ss.zrle, ss.copyRect, ss.cursorEnc, ss.extDesktop, ss.desktopSize = false, false, false, false, false
 			for i := 0; i < n; i++ {
 				switch int32(binary.BigEndian.Uint32(encs[4*i:])) {
 				case encZRLE:
 					ss.zrle = true
+				case encCopyRect:
+					ss.copyRect = true
 				case encCursor:
 					ss.cursorEnc = true
 				case encExtDesktop:
@@ -382,6 +387,7 @@ func (ss *session) readLoop() error {
 			}
 			down := buf[0] != 0
 			sym := binary.BigEndian.Uint32(buf[3:7])
+			ss.inputArrived()
 			ss.srv.inMu.Lock()
 			ss.srv.kb.Event(sym, down)
 			ss.srv.inMu.Unlock()
@@ -390,6 +396,7 @@ func (ss *session) readLoop() error {
 				return err
 			}
 			ss.pointer(buf[0], int(binary.BigEndian.Uint16(buf[1:])), int(binary.BigEndian.Uint16(buf[3:])))
+			ss.inputArrived()
 		case 6: // ClientCutText
 			if _, err := io.ReadFull(r, buf[:7]); err != nil {
 				return err

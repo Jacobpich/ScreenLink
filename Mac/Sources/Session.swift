@@ -9,6 +9,7 @@ enum KeyCapture {
     static func install() {
         NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { e in
             guard let s = e.window?.windowController as? SessionController, s.capturesKeys else { return e }
+            if s.handleDisplayShortcut(e) { return nil }
             s.handleKey(e)
             return nil
         }
@@ -102,8 +103,17 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
     private let overlay = StatusOverlay()
 
     private var fbSize = CGSize.zero
-    private var screens: [CGRect] = []
     private var visible = CGRect.zero          // part of the framebuffer shown (whole or one display)
+
+    // Displays: regions of the shared desktop image (from the PC's monitor list, or found in
+    // the picture for a Mac, which sends all its displays as one wide image).
+    private(set) var displays: [CGRect] = []
+    private(set) var selectedDisplay: Int?
+    private(set) var displayLayoutIsManual = false
+    private var serverScreens: [CGRect] = []
+    private var needsDisplayDetection = true
+    private var restoredDisplaySelection = false
+    private let flashLabel = FlashLabel()
     private var contentRect = CGRect.zero      // where it's drawn, in view points (top-left origin)
     private var sizedWindow = false
 
@@ -154,6 +164,8 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
         overlay.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(view)
         container.addSubview(overlay)
+        flashLabel.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(flashLabel)
         NSLayoutConstraint.activate([
             view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -162,10 +174,18 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
             overlay.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             overlay.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             overlay.widthAnchor.constraint(equalToConstant: 340),
+            flashLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            flashLabel.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 16),
         ])
         window.contentView = container
         super.init(window: window)
         window.delegate = self
+        let toolbar = NSToolbar(identifier: "ScreenLinkSession")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .unifiedCompact
         view.session = self
         overlay.onConnect = { [weak self] user, pass in self?.signIn(user: user, password: pass) }
         overlay.onRetry = { [weak self] in self?.connect() }
@@ -236,6 +256,14 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
         scheduleDraw()
     }
 
+    /// Runs on the main thread after picture updates have been drawn.
+    private func afterUpdate() {
+        guard needsDisplayDetection, fbSize.width > 0 else { return }
+        needsDisplayDetection = false
+        // Give the first full picture a moment to arrive, then look for the displays in it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.detectDisplays(retry: true) }
+    }
+
     func rfb(_ c: RFBConnection, cursorChanged cursor: CursorImage?) {
         DispatchQueue.main.async { [weak self] in
             self?.remoteCursor = cursor
@@ -255,9 +283,8 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
     func rfb(_ c: RFBConnection, screens: [CGRect]) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let changed = self.screens != screens
-            self.screens = screens.count > 1 ? screens : []
-            if changed && self.visible != CGRect(origin: .zero, size: self.fbSize) { self.showDisplay(nil) }
+            self.serverScreens = screens
+            if screens.count > 1 { self.detectDisplays(retry: false) }
         }
     }
 
@@ -290,8 +317,14 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
         switch state {
         case .connected:
             overlay.isHidden = true
-            window.subtitle = isPC ? "Windows PC" : "Mac"
-            if fbSize.width > 0 { window.subtitle += " · \(Int(fbSize.width))×\(Int(fbSize.height))" }
+            var parts = [isPC ? "Windows PC" : "Mac"]
+            if let i = selectedDisplay, displays.indices.contains(i) {
+                parts.append("Display \(i + 1) of \(displays.count)")
+            } else if displays.count > 1 {
+                parts.append("All \(displays.count) displays")
+            }
+            if visible.width > 0 { parts.append("\(Int(visible.width))×\(Int(visible.height))") }
+            window.subtitle = parts.joined(separator: " · ")
             window.makeFirstResponder(remoteView)
         case .connecting:
             overlay.show(busy: "Connecting…")
@@ -325,6 +358,7 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
             guard let self else { return }
             self.drawLock.lock(); self.drawPending = false; self.drawLock.unlock()
             self.remoteView.needsDisplay = true
+            self.afterUpdate()
         }
     }
 
@@ -332,29 +366,149 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
         let changed = size != fbSize
         fbSize = size
         if changed {
-            screens = []
+            displays = []
+            serverScreens = []
             visible = CGRect(origin: .zero, size: size)
         }
+        needsDisplayDetection = true
         if !sizedWindow { sizeWindowToFit() }
         updateAspect()
         layout()
         stateChanged()
+        publishDisplays()
     }
 
-    /// Shows one display (index into the server's monitor list), or all of them.
-    func showDisplay(_ index: Int?) {
+    // MARK: Displays
+
+    private var layoutKey: String { "displayLayout.\(host.id.uuidString)" }
+    private var selectionKey: String { "displaySelection.\(host.id.uuidString)" }
+    private var fullRect: CGRect { CGRect(origin: .zero, size: fbSize) }
+
+    /// The saved manual layout as [columns, rows], if one is set for this computer.
+    var manualLayout: [Int]? {
+        guard let a = UserDefaults.standard.array(forKey: layoutKey) as? [Int], a.count == 2 else { return nil }
+        return a
+    }
+
+    /// Shows one display, or all of them (nil). Remembered for this computer.
+    func selectDisplay(_ index: Int?, announce: Bool = true) {
         guard fbSize.width > 0 else { return }
-        if let index, index < screens.count {
-            visible = screens[index].intersection(CGRect(origin: .zero, size: fbSize))
-        } else {
-            visible = CGRect(origin: .zero, size: fbSize)
-        }
+        let index = index.flatMap { displays.indices.contains($0) ? $0 : nil }
+        selectedDisplay = index
+        UserDefaults.standard.set(index ?? -1, forKey: selectionKey)
+        visible = index.map { displays[$0].intersection(fullRect) } ?? fullRect
+        if visible.isEmpty { visible = fullRect }
         updateAspect()
         sizeWindowToFit()
         layout()
+        stateChanged()
+        publishDisplays()
+        if announce {
+            if let index {
+                let r = displays[index]
+                flashLabel.flash("Display \(index + 1)  ·  \(Int(r.width))×\(Int(r.height))")
+            } else {
+                flashLabel.flash("All Displays")
+            }
+        }
     }
 
-    var displayCount: Int { screens.count }
+    /// Next/previous display, like the iPhone's four-finger swipe. Going back past the first shows all.
+    func stepDisplay(_ delta: Int) {
+        let n = displays.count
+        guard n > 1 else { flashLabel.flash("Only one display found"); return }
+        if delta > 0 {
+            let next = selectedDisplay.map { min(n - 1, $0 + 1) } ?? 0
+            if next != selectedDisplay { selectDisplay(next) }
+        } else if let cur = selectedDisplay {
+            selectDisplay(cur == 0 ? nil : cur - 1)
+        }
+    }
+
+    func setManualLayout(columns: Int, rows: Int) {
+        UserDefaults.standard.set([columns, rows], forKey: layoutKey)
+        applyDisplays(DisplayDetector.even(fullRect, columns: columns, rows: rows), manual: true)
+        selectDisplay(displays.isEmpty ? nil : 0)
+    }
+
+    func redetectDisplays() {
+        UserDefaults.standard.removeObject(forKey: layoutKey)
+        detectDisplays(retry: false, announce: true)
+    }
+
+    private func detectDisplays(retry: Bool, announce: Bool = false) {
+        guard fbSize.width > 0 else { return }
+        if let saved = manualLayout {
+            applyDisplays(DisplayDetector.even(fullRect, columns: saved[0], rows: saved[1]), manual: true)
+            return
+        }
+        if serverScreens.count > 1 {
+            applyDisplays(serverScreens, manual: false)
+            if announce { flashLabel.flash("Found \(serverScreens.count) displays") }
+            return
+        }
+        guard let fb = connection?.framebuffer else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = DisplayDetector.detect(fb)
+            DispatchQueue.main.async {
+                guard let self, fb === self.connection?.framebuffer else { return }
+                self.applyDisplays(found.count > 1 ? found : [], manual: false)
+                if announce {
+                    self.flashLabel.flash(found.count > 1 ? "Found \(found.count) displays" : "Only one display found")
+                }
+                // Content may still have been loading; look once more.
+                if retry && found.count <= 1 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.detectDisplays(retry: false) }
+                }
+            }
+        }
+    }
+
+    private func applyDisplays(_ rects: [CGRect], manual: Bool) {
+        displays = rects
+        displayLayoutIsManual = manual
+        var restore: Int?
+        if !restoredDisplaySelection, rects.count > 1 {
+            restoredDisplaySelection = true
+            let saved = UserDefaults.standard.object(forKey: selectionKey) as? Int ?? -1
+            if rects.indices.contains(saved) { restore = saved }
+        }
+        if let restore {
+            selectDisplay(restore, announce: false)
+        } else if let i = selectedDisplay, rects.indices.contains(i) {
+            selectDisplay(i, announce: false)    // the display's rectangle may have moved
+        } else {
+            selectedDisplay = nil
+            if visible != fullRect { selectDisplay(nil, announce: false) }
+            stateChanged()
+            publishDisplays()
+        }
+    }
+
+    /// ⌃⌥⌘→ / ⌃⌥⌘← switch displays, ⌃⌥⌘0 shows all, ⌃⌥⌘1–9 picks one.
+    func handleDisplayShortcut(_ e: NSEvent) -> Bool {
+        guard e.type == .keyDown || e.type == .keyUp else { return false }
+        let f = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard f.contains(.command), f.contains(.option), f.contains(.control) else { return false }
+        let digits: [UInt16: Int] = [29: 0, 18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9]
+        guard e.keyCode == 123 || e.keyCode == 124 || digits[e.keyCode] != nil else { return false }
+        guard e.type == .keyDown, !e.isARepeat else { return true }
+        switch e.keyCode {
+        case 124: stepDisplay(1)
+        case 123: stepDisplay(-1)
+        default:
+            let d = digits[e.keyCode]!
+            if d == 0 { selectDisplay(nil) }
+            else if displays.indices.contains(d - 1) { selectDisplay(d - 1) }
+        }
+        return true
+    }
+
+    /// Keeps the menu bar's Displays menu in step with the session in front.
+    private func publishDisplays() {
+        guard window?.isKeyWindow == true || DisplayMenuModel.shared.session === self else { return }
+        DisplayMenuModel.shared.update(from: self)
+    }
 
     private func sizeWindowToFit() {
         guard let window, visible.width > 0, let screen = window.screen ?? NSScreen.main else { return }
@@ -539,6 +693,7 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
     // MARK: Window
 
     func windowDidBecomeKey(_ notification: Notification) {
+        DisplayMenuModel.shared.update(from: self)
         if state == .connected {
             window?.makeFirstResponder(remoteView)
             sendLocalClipboardIfChanged(force: false)
@@ -560,6 +715,7 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
         connection?.stop()
         connection = nil
         Self.sessions[host.id] = nil
+        if DisplayMenuModel.shared.session === self { DisplayMenuModel.shared.update(from: nil) }
     }
 }
 

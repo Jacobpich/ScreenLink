@@ -299,6 +299,10 @@ final class RFBConnection {
     private func readFramebufferUpdate() throws {
         _ = try socket.readU8()
         let n = Int(try socket.readU16())
+        // ScreenLink Receiver: ask for the next frame now, so it's prepared while this one
+        // downloads (one frame in flight). macOS gets the strict one-at-a-time flow control.
+        let pipelined = !serverIsApple && hasFullPicture && !fullFramePending
+        if pipelined { requestUpdate(incremental: true) }
         var dirty: [CGRect] = []
         var resized = false
         var coversPing = false
@@ -397,7 +401,7 @@ final class RFBConnection {
                 ConnLog.write("full picture received after \(framesReceived) updates")
             }
         }
-        requestUpdate(incremental: !fullFramePending)
+        if !pipelined { requestUpdate(incremental: !fullFramePending) }
         if let fb = framebuffer {
             if resized { dirty = [CGRect(x: 0, y: 0, width: fb.width, height: fb.height)] }
             if !dirty.isEmpty { delegate?.rfb(self, didUpdate: fb, dirty: dirty) }
@@ -411,6 +415,10 @@ final class RFBConnection {
     // to the latest position and scroll-wheel steps are paced, so a busy Mac is never flooded.
 
     private static let maxScrollBacklog = 16               // notches; extra is dropped, not queued
+    // ScreenLink Receiver (Windows) handles input apart from the picture, so input never waits
+    // behind a frame there: no ping gating, a deeper scroll queue, several notches per tick.
+    private var scrollCap: Int { serverIsApple ? Self.maxScrollBacklog : 96 }
+    private var notchesPerTick: Int { serverIsApple ? 1 : 6 }
     private static let inputInterval: TimeInterval = 0.004 // pointer/scroll paced to ≤ 250 updates/s
 
     private func startWriter() {
@@ -487,24 +495,24 @@ final class RFBConnection {
                 lastInput = now
                 if pingOutstanding && now - pingSent > 1.0 { pingOutstanding = false }   // reply lost; carry on
                 let allowance = max(0.04, pingRTT * 2)
-                let macIsBehind = pingOutstanding && now - pingSent > allowance
+                let macIsBehind = serverIsApple && pingOutstanding && now - pingSent > allowance
                 if !macIsBehind && socket.sendBacklogIsLow() {
                     if let m = pendingMove {
                         batch += pointerMessage(m.x, m.y, buttonMask)
                         pendingMove = nil
                     }
                     let (sx, sy) = scrollAt
-                    if pendingScroll.dy != 0 {
+                    for _ in 0..<notchesPerTick where pendingScroll.dy != 0 {
                         let bit: UInt8 = pendingScroll.dy > 0 ? 16 : 8
                         batch += pointerMessage(sx, sy, buttonMask | bit) + pointerMessage(sx, sy, buttonMask)
                         pendingScroll.dy -= pendingScroll.dy.signum()
                     }
-                    if pendingScroll.dx != 0 {
+                    for _ in 0..<notchesPerTick where pendingScroll.dx != 0 {
                         let bit: UInt8 = pendingScroll.dx > 0 ? 64 : 32
                         batch += pointerMessage(sx, sy, buttonMask | bit) + pointerMessage(sx, sy, buttonMask)
                         pendingScroll.dx -= pendingScroll.dx.signum()
                     }
-                    if !pingOutstanding, let ping = pingMessageLocked() {
+                    if serverIsApple, !pingOutstanding, let ping = pingMessageLocked() {
                         batch += ping
                         pingOutstanding = true
                         pingSent = now
@@ -550,7 +558,7 @@ final class RFBConnection {
     func scroll(dx: Int, dy: Int, x: Int, y: Int) {
         guard dx != 0 || dy != 0 else { return }
         let p = clampPoint(x, y)
-        let cap = Self.maxScrollBacklog
+        let cap = scrollCap
         out.lock()
         flushMoveLocked()
         scrollAt = p
