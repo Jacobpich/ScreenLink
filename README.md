@@ -39,10 +39,11 @@ same ScreenLink Receiver on the PC.
 **Install:** open **Terminal** on the laptop, paste this line and press Return:
 
 ```bash
-curl -L https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLink-Mac.zip -o /tmp/ScreenLink-Mac.zip && ditto -x -k /tmp/ScreenLink-Mac.zip /Applications && open /Applications/ScreenLink.app
+curl -fL https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLink-Mac.zip -o /tmp/ScreenLink-Mac.zip && { pkill -x ScreenLink; sleep 1; rm -rf /Applications/ScreenLink.app; ditto -x -k /tmp/ScreenLink-Mac.zip /Applications; } && open /Applications/ScreenLink.app
 ```
 
-It installs ScreenLink into Applications and opens it. Installing this way skips the "can't
+It installs ScreenLink into Applications and opens it. **Use the same line to update:** it quits
+the running copy and replaces it, so there's nothing to uninstall. Installing this way skips the "can't
 be opened" warning macOS shows for apps downloaded in a browser. If you'd rather download
 [ScreenLink-Mac.zip](https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLink-Mac.zip)
 in a browser, unzip it, move ScreenLink to Applications, open it once, then go to
