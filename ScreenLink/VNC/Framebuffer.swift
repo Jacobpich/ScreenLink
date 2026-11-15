@@ -11,7 +11,9 @@ final class Framebuffer {
         self.width = max(1, width)
         self.height = max(1, height)
         pixels = .allocate(capacity: self.width * self.height)
-        pixels.initialize(repeating: 0xFF20_2020, count: self.width * self.height)
+        // Black: macOS never sends the filler around differently sized displays, so it stays this
+        // color, which is also what display detection looks for.
+        pixels.initialize(repeating: 0xFF00_0000, count: self.width * self.height)
     }
 
     deinit { pixels.deallocate() }

@@ -289,12 +289,31 @@ final class RFBConnection {
     // asking for changes after that would leave the screen black until something moved.
     private var fullFramePending = true
     private var fullFrameArea = 0
+    /// macOS answers a full-screen request with one rectangle per display (the black filler
+    /// between differently sized displays is never sent), so those rectangles are the layout.
+    private var appleDisplayRects: [CGRect] = []
     /// False until the first complete picture of the desktop has arrived (read from the UI).
     private(set) var hasFullPicture = false
     private var connectedAt = CFAbsoluteTimeGetCurrent()
     private var bytesAtConnect = 0
     /// Bytes received since the session started (for the loading indicator).
     var bytesSinceConnect: Int { socket.bytesReceived - bytesAtConnect }
+
+    private func reportAppleDisplays() {
+        let rects = appleDisplayRects
+        appleDisplayRects = []
+        guard serverIsApple, rects.count > 1, let fb = framebuffer else { return }
+        let full = CGRect(x: 0, y: 0, width: fb.width, height: fb.height)
+        // Must look like separate whole displays: inside the picture, not overlapping, display-shaped.
+        for (i, r) in rects.enumerated() {
+            let a = r.width / r.height
+            guard full.contains(r), (a >= 1.2 && a <= 2.6) || (a >= 0.45 && a <= 0.85) else { return }
+            for o in rects[(i + 1)...] where r.intersects(o) { return }
+        }
+        let sorted = rects.sorted { abs($0.minY - $1.minY) > 200 && abs($0.minX - $1.minX) < 200 ? $0.minY < $1.minY : $0.minX < $1.minX }
+        ConnLog.write("displays from the Mac's update: \(sorted.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" })")
+        delegate?.rfb(self, screens: sorted)
+    }
 
     private func readFramebufferUpdate() throws {
         _ = try socket.readU8()
@@ -339,6 +358,7 @@ final class RFBConnection {
                 resized = true
                 fullFramePending = true
                 fullFrameArea = 0
+                appleDisplayRects = []
                 delegate?.rfbDidResize(self, framebuffer: fb)
                 continue
             case Encoding.extendedDesktopSize:
@@ -358,6 +378,7 @@ final class RFBConnection {
                     resized = true
                     fullFramePending = true
                     fullFrameArea = 0
+                    appleDisplayRects = []
                     delegate?.rfbDidResize(self, framebuffer: nfb)
                 }
                 delegate?.rfb(self, screens: screens)
@@ -369,7 +390,11 @@ final class RFBConnection {
             }
             if enc == Encoding.lastRect { break }
             dirty.append(CGRect(x: x, y: y, width: w, height: h))
-            if fullFramePending { fullFrameArea += w * h }
+            if fullFramePending {
+                fullFrameArea += w * h
+                let r = CGRect(x: x, y: y, width: w, height: h)
+                if serverIsApple && w >= 320 && h >= 240 && !appleDisplayRects.contains(r) { appleDisplayRects.append(r) }
+            }
             if pingPoint.x >= x && pingPoint.x < x + w && pingPoint.y >= y && pingPoint.y < y + h { coversPing = true }
         }
 
@@ -394,6 +419,7 @@ final class RFBConnection {
         // waiting on a slow phone (which would freeze Screen Sharing for every viewer).
         if fullFramePending, let fb = framebuffer, fullFrameArea >= fb.width * fb.height {
             fullFramePending = false
+            reportAppleDisplays()
             if !hasFullPicture {
                 hasFullPicture = true
                 ConnLog.write("full picture received after \(framesReceived) updates, \(bytesSinceConnect / 1024) KB in \(String(format: "%.1f", CFAbsoluteTimeGetCurrent() - connectedAt))s")
