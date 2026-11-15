@@ -12,9 +12,10 @@ instructions are in the [main README](../README.md#windows-pc-download).
 1. Run `ScreenLinkReceiver.exe`. Windows SmartScreen may warn because the app isn't signed: **More info → Run anyway**.
 2. Choose a password in the setup window, and answer whether iPhones on this Wi-Fi may connect
    without Tailscale.
-3. Click **Yes** when Windows asks for permission. That sets it to start at sign-in with admin
-   rights (so it can control admin apps) and adds a firewall rule that only lets Tailscale devices
-   (100.64.0.0/10) in, plus this network (`LocalSubnet`) if you said yes.
+3. Click **Yes** when Windows asks for permission. That copies it to `C:\Program Files\ScreenLink Receiver`,
+   installs the **ScreenLink Receiver** Windows service, starts the tray icon at sign-in, and adds a
+   firewall rule that only lets Tailscale devices (100.64.0.0/10) in, plus this network
+   (`LocalSubnet`) if you said yes.
 4. In ScreenLink: put the Tailscale address (100.x) in **Tailscale name or IP** and the home address
    (192.168.x.x) in **Home Wi-Fi address**, plus any username and that password. ScreenLink uses the
    home address when it answers and Tailscale otherwise.
@@ -22,7 +23,7 @@ instructions are in the [main README](../README.md#windows-pc-download).
 The tray icon (by the clock) shows the address and has **Allow Devices on This Wi-Fi** (flips the
 setting and the firewall rule, with a permission prompt), Change Password, Open Log and Quit.
 Opening a newer `.exe` on a PC that's already set up updates the installed copy.
-Settings and the log live in `%APPDATA%\ScreenLink Receiver\`.
+Settings and logs live in `C:\ProgramData\ScreenLink Receiver\`.
 
 ## How it works
 
@@ -44,11 +45,30 @@ Settings and the log live in `%APPDATA%\ScreenLink Receiver\`.
 - **Clipboard:** both directions, UTF-8.
 - Keeps the PC awake while someone is connected.
 
+## UAC prompts, lock screen and sign-in
+
+Windows draws UAC prompts, the lock screen and the sign-in screen on a separate **secure desktop**
+that normal apps can't see or control. Only SYSTEM can. So the receiver runs as a Windows service
+(SYSTEM, `--service`), which starts a copy of itself (`--agent`) in the session on the physical screen.
+The agent does the screen capture and input on one thread that follows whichever desktop has the
+input (`desktop_windows.go`), so when a UAC prompt appears you see it on the iPhone and can click
+**Yes**. It also works at the lock screen and after a reboot, before anyone has signed in.
+When the session changes (sign out, switch user), the service restarts the agent there.
+
+- Settings (password hash, Wi-Fi switch) live in `C:\ProgramData\ScreenLink Receiver\`, which only
+  administrators can change. The agent's log is `receiver.log` there; the service's is `service.log`.
+- The program lives in `C:\Program Files\ScreenLink Receiver\` (a service must run from a folder
+  normal users can't write to).
+- The tray icon is a separate normal app that shows status. Quit stops the service until the next
+  sign-in or restart.
+- If permission isn't given during setup, it falls back to the old per-user mode, which can't
+  control UAC prompts or the sign-in screen.
+
 ## Limits
 
-- It runs in your signed-in session. Windows shows its sign-in screen, lock screen and UAC
-  prompts on a separate secure desktop that normal apps can't see or control. So after a
-  reboot, while the PC is locked, or during a UAC prompt, ScreenLink can't sign in for you.
+- **Ctrl+Alt+Delete** can't be sent. If your PC requires it at the lock screen, turn that off
+  (`netplwiz` → Advanced → "Require users to press Ctrl+Alt+Delete").
+- Only the session on the physical screen is shared, not Remote Desktop sessions.
 
 ## Develop
 

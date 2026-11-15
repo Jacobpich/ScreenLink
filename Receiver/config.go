@@ -38,12 +38,32 @@ func (c *Config) reload() {
 	c.mu.Unlock()
 }
 
-func configDir() string {
+// userConfigDir is the per-user settings folder (used before the service is installed).
+func userConfigDir() string {
 	d, err := os.UserConfigDir()
 	if err != nil {
 		d = "."
 	}
 	return filepath.Join(d, "ScreenLink Receiver")
+}
+
+// machineConfigDir holds the settings once the Windows service is installed, so the service
+// (which runs as SYSTEM) and the tray app share them. Only administrators can change it.
+func machineConfigDir() string {
+	pd := os.Getenv("ProgramData")
+	if pd == "" {
+		return ""
+	}
+	return filepath.Join(pd, "ScreenLink Receiver")
+}
+
+func configDir() string {
+	if m := machineConfigDir(); m != "" {
+		if _, err := os.Stat(filepath.Join(m, "config.json")); err == nil {
+			return m
+		}
+	}
+	return userConfigDir()
 }
 
 func loadConfig() *Config {

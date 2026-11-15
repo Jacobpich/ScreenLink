@@ -15,7 +15,7 @@ ScreenLink can control a Windows PC too. The PC needs one small app, **ScreenLin
    - If a blue "Windows protected your PC" box appears, click **More info → Run anyway**. (The app isn't signed, so Windows doesn't recognize it yet.)
 3. A setup window opens. Type a password, press Enter, then type it again.
 4. It asks whether iPhones on this Wi-Fi may connect without Tailscale. Type **y** and press Enter (that's what lets it work at home even when Tailscale is off on the iPhone).
-5. Windows asks for permission. Click **Yes**.
+5. Windows asks for permission. Click **Yes**. This installs ScreenLink Receiver as a background service, which lets you see and click UAC prompts ("Do you want to allow this app to make changes?"), the lock screen and the sign-in screen from your iPhone.
 6. The window shows two addresses. On the iPhone, open ScreenLink, tap **+ → Add Computer Manually**, and fill in:
    - **Tailscale name or IP:** the `100.x.y.z` address (works anywhere, including away from home)
    - **Home Wi-Fi address:** the `192.168.x.x` address (used automatically when you're home)
@@ -23,9 +23,11 @@ ScreenLink can control a Windows PC too. The PC needs one small app, **ScreenLin
 
 At home, ScreenLink connects straight over your Wi-Fi. Away from home, it switches to Tailscale on its own; just have Tailscale on in the iPhone's Tailscale app.
 
-That's it. The receiver starts when you sign in to the PC; its icon is by the clock. Right-click the icon to see the address again, change the password, or turn **Allow Devices on This Wi-Fi** on or off.
+That's it. The receiver starts with Windows, even before anyone signs in; its icon is by the clock. Right-click the icon to see the address again, change the password, or turn **Allow Devices on This Wi-Fi** on or off.
 
 **Tailscale or Wi-Fi?** For access away from home, install [Tailscale](https://tailscale.com/download/windows) on the PC and sign in with the same account as the iPhone. Over Tailscale the whole connection is encrypted. On the home Wi-Fi, the password is still protected but the screen picture isn't encrypted, so only allow that on your home network. Without Tailscale on the PC, ScreenLink only works at home.
+
+**Already installed an older version?** Download it again and open it, then click **Yes** when Windows asks. It upgrades in place and keeps your password.
 
 More detail: [Receiver/README.md](Receiver/README.md).
 

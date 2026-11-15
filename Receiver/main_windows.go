@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
 const taskName = "ScreenLink Receiver"
@@ -30,10 +32,32 @@ func main() {
 	}
 	args := strings.Join(os.Args[1:], " ")
 	switch {
+	case strings.Contains(args, "--service"):
+		runService()
+		return
+	case strings.Contains(args, "--agent"):
+		runAgent()
+		return
 	case strings.Contains(args, "--install"):
 		os.Exit(installElevated())
 	case strings.Contains(args, "--firewall"):
 		os.Exit(firewallElevated())
+	case strings.Contains(args, "--migrate-config"):
+		setupLogAt(userConfigDir(), "install.log")
+		if migrateConfig() != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	case strings.Contains(args, "--service-on"):
+		if setServiceRunning(true) != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	case strings.Contains(args, "--service-off"):
+		if setServiceRunning(false) != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
 	case strings.Contains(args, "--setup"):
 		runSetup(true)
 		return
@@ -45,32 +69,49 @@ func main() {
 	}
 	background := strings.Contains(args, "--background")
 	exe, _ := os.Executable()
-	if !background && !strings.EqualFold(filepath.Clean(exe), filepath.Clean(installedExe())) {
+	if !background && !samePath(exe, installedExe()) && !samePath(exe, legacyExe()) {
 		upgrade(exe)
+		return
+	}
+	if serviceQuery() != "" {
+		runTrayOnly(cfg, background)
 		return
 	}
 	runReceiver(cfg, background)
 }
 
+func samePath(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
+
 // upgrade: a newly downloaded copy was opened on a PC that's already set up. Replace the
 // installed copy with it and restart.
 func upgrade(exe string) {
-	if err := copyFile(exe, installedExe()); err != nil {
+	code, err := runElevated(exe, "--install")
+	if err == nil && (code == 0 || code == 3) {
+		exec.Command("schtasks", "/Run", "/TN", taskName).Run()
+		msg := "ScreenLink Receiver is updated and running."
+		if code == 3 {
+			msg += "\n\nThe background service couldn't be set up, so UAC prompts and the sign-in screen can't be controlled. Details are in install.log."
+		}
+		messageBox(msg+"\n\n"+addressHelp(), appName, 0x40)
+		return
+	}
+	// No admin rights: update the per-user copy like before.
+	if err := copyFile(exe, legacyExe()); err != nil {
 		messageBox("Couldn't update ScreenLink Receiver:\n\n"+err.Error(), appName, 0x10)
 		return
 	}
-	if exec.Command("schtasks", "/Run", "/TN", taskName).Run() != nil {
-		exec.Command(installedExe(), "--background").Start()
-	}
-	messageBox("ScreenLink Receiver is updated and running.\n\n"+addressHelp(), appName, 0x40)
+	exec.Command(legacyExe(), "--background").Start()
+	messageBox("ScreenLink Receiver is updated and running.\n\nWindows permission wasn't given, so it can't control UAC prompts. Open the download again and click Yes to fix that.\n\n"+addressHelp(), appName, 0x40)
 }
 
 // ---------------------------------------------------------------------------------------
 // Running
 
-func setupLog() {
-	os.MkdirAll(configDir(), 0o700)
-	path := filepath.Join(configDir(), "receiver.log")
+func setupLog() { setupLogAt(configDir(), "receiver.log") }
+
+func setupLogAt(dir, name string) {
+	os.MkdirAll(dir, 0o755)
+	path := filepath.Join(dir, name)
 	if st, err := os.Stat(path); err == nil && st.Size() > 1<<20 {
 		os.Rename(path, path+".old")
 	}
@@ -108,6 +149,41 @@ func runReceiver(cfg *Config, background bool) {
 		err := srv.Serve(l)
 		log.Printf("server stopped: %v", err)
 		os.Exit(1)
+	}()
+	runTray(!background)
+}
+
+// serviceMode: the service serves; this process is just the tray icon.
+var serviceMode bool
+
+func runTrayOnly(cfg *Config, background bool) {
+	setupLogAt(userConfigDir(), "tray.log")
+	mutex, _, err := pCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(u16("Local\\ScreenLinkReceiver"))))
+	if mutex == 0 || err == syscall.Errno(183) {
+		if !background {
+			messageBox("ScreenLink Receiver is already running (look for its icon by the clock).\n\n"+addressHelp(), appName, 0x40)
+		}
+		return
+	}
+	serviceMode = true
+	appCfg = cfg
+	if serviceQuery() == "stopped" {
+		exe, _ := os.Executable()
+		if setServiceRunning(true) != nil {
+			runElevated(exe, "--service-on")
+		}
+	}
+	go func() {
+		for {
+			n := 0
+			if st, ok := readStatus(); ok {
+				n = st.Viewers
+			}
+			if n != trayViewers {
+				setTrayTip(n)
+			}
+			time.Sleep(2 * time.Second)
+		}
 	}()
 	runTray(!background)
 }
@@ -177,10 +253,21 @@ func readHidden(in *bufio.Reader, f *os.File) string {
 	return strings.TrimRight(line, "\r\n")
 }
 
+// installedExe is where the service runs from. It has to be a folder only administrators can
+// change (a service runs as SYSTEM).
 func installedExe() string {
+	base := os.Getenv("ProgramFiles")
+	if base == "" {
+		base = `C:\Program Files`
+	}
+	return filepath.Join(base, "ScreenLink Receiver", "ScreenLinkReceiver.exe")
+}
+
+// legacyExe is the per-user copy used when admin rights weren't given (no service).
+func legacyExe() string {
 	base := os.Getenv("LOCALAPPDATA")
 	if base == "" {
-		base = configDir()
+		base = userConfigDir()
 	}
 	return filepath.Join(base, "Programs", "ScreenLink Receiver", "ScreenLinkReceiver.exe")
 }
@@ -218,47 +305,66 @@ func runSetup(changeOnly bool) {
 		ans, _ := in.ReadString('\n')
 		cfg.AllowLAN = strings.HasPrefix(strings.ToLower(strings.TrimSpace(ans)), "y")
 	}
+	exe, _ := os.Executable()
+	machine := cfg.path != "" && filepath.Dir(cfg.path) == machineConfigDir()
 	if err := cfg.save(); err != nil {
-		p("\nCouldn't save settings: %v\n", err)
-		wait()
-		return
+		if !machine {
+			p("\nCouldn't save settings: %v\n", err)
+			wait()
+			return
+		}
+		// The shared settings need admin rights: save for this user, then copy them over.
+		cfg.path = filepath.Join(userConfigDir(), "config.json")
+		if err := cfg.save(); err != nil {
+			p("\nCouldn't save settings: %v\n", err)
+			wait()
+			return
+		}
+		if changeOnly {
+			p("Windows will ask for permission to update the password. Click Yes.\n")
+			if code, err := runElevated(exe, "--migrate-config"); err != nil || code != 0 {
+				p("\nPermission wasn't given, so the password didn't change.\n")
+				wait()
+				return
+			}
+		}
 	}
 	p("Password saved.\n")
-	if changeOnly && running() {
+	if changeOnly && (running() || serviceQuery() == "running") {
 		p("\nScreenLink Receiver is running and will use the new password from now on.\n")
 		wait()
 		return
 	}
 
-	// Copy to a permanent place so it still works if the download is deleted.
-	exe, _ := os.Executable()
-	target := installedExe()
-	if !strings.EqualFold(filepath.Clean(exe), filepath.Clean(target)) {
-		os.MkdirAll(filepath.Dir(target), 0o755)
-		if err := copyFile(exe, target); err != nil {
-			p("\nCouldn't install to %s: %v\nRunning from the current location instead.\n", target, err)
-			target = exe
-		}
-	}
-
 	p("\nNext, Windows will ask for permission. Click Yes so ScreenLink can:\n")
-	p("  - start automatically when you sign in\n")
-	p("  - control apps that run as administrator\n")
+	p("  - run in the background as a Windows service, so it can show and click\n")
+	p("    UAC prompts (\"Do you want to allow this app…\"), the lock screen and sign-in\n")
+	p("  - start automatically, even before you sign in\n")
 	if cfg.AllowLAN {
 		p("  - accept connections through the firewall (Tailscale and this network only)\n\n")
 	} else {
 		p("  - accept connections through the firewall (Tailscale devices only)\n\n")
 	}
-	code, err := runElevated(target, "--install")
+	code, err := runElevated(exe, "--install")
 	switch {
-	case err == nil && code == 0:
+	case err == nil && (code == 0 || code == 3):
 		exec.Command("schtasks", "/Run", "/TN", taskName).Run()
-		p("Done. ScreenLink Receiver is running (icon by the clock) and will start when you sign in.\n")
+		p("Done. ScreenLink Receiver is running (icon by the clock) and starts with Windows.\n")
+		if code == 3 {
+			p("The background service couldn't be set up, so UAC prompts can't be controlled.\n")
+			p("Details: %s\n", filepath.Join(userConfigDir(), "install.log"))
+		}
 	default:
 		if err != nil {
 			p("Permission wasn't given (%v), so using a simpler setup.\n", err)
 		} else {
 			p("Admin setup failed (code %d), so using a simpler setup.\n", code)
+		}
+		p("In this mode ScreenLink can't control UAC prompts or the sign-in screen.\n")
+		target := legacyExe()
+		os.MkdirAll(filepath.Dir(target), 0o755)
+		if err := copyFile(exe, target); err != nil {
+			target = exe
 		}
 		setRunKey(target)
 		exec.Command(target, "--background").Start()
@@ -294,7 +400,8 @@ func copyFile(src, dst string) error {
 	}
 	out.Close()
 	// If an older copy is running, stop it so it can be replaced.
-	exec.Command("taskkill", "/F", "/IM", "ScreenLinkReceiver.exe", "/FI", fmt.Sprintf("PID ne %d", os.Getpid())).Run()
+	exec.Command("taskkill", "/F", "/IM", "ScreenLinkReceiver.exe", "/FI", fmt.Sprintf("PID ne %d", os.Getpid()),
+		"/FI", fmt.Sprintf("PID ne %d", os.Getppid())).Run()
 	time.Sleep(300 * time.Millisecond)
 	return os.Rename(tmp, dst)
 }
@@ -314,11 +421,36 @@ func runElevated(exe, args string) (int, error) {
 	return int(code), nil
 }
 
-// installElevated runs as administrator: logon task with highest privileges + firewall rule.
+// installElevated runs as administrator: copies the program to Program Files, moves the settings
+// to ProgramData, installs and starts the service, adds the firewall rule, and sets the tray icon
+// to start at sign-in. Returns 0 on success, 3 if everything but the service worked.
 func installElevated() int {
-	setupLog()
-	exe, _ := os.Executable()
+	setupLogAt(userConfigDir(), "install.log")
+	src, _ := os.Executable()
+	exe := installedExe()
+	if m, err := mgr.Connect(); err == nil { // stop the old service so its files can be replaced
+		if s, err := m.OpenService(serviceName); err == nil {
+			stopService(s)
+			s.Close()
+		}
+		m.Disconnect()
+	}
+	if !samePath(src, exe) {
+		os.MkdirAll(filepath.Dir(exe), 0o755)
+		if err := copyFile(src, exe); err != nil {
+			log.Printf("copy to %s failed: %v", exe, err)
+			return 2
+		}
+	} else {
+		exec.Command("taskkill", "/F", "/IM", "ScreenLinkReceiver.exe", "/FI", fmt.Sprintf("PID ne %d", os.Getpid()),
+			"/FI", fmt.Sprintf("PID ne %d", os.Getppid())).Run()
+	}
+	if err := migrateConfig(); err != nil {
+		log.Printf("moving settings failed: %v", err)
+		return 2
+	}
 	cfg := loadConfig()
+	// The tray icon: a normal app at sign-in, with admin rights so its switches can change settings.
 	tr := fmt.Sprintf(`"%s" --background`, exe)
 	// Created by the signed-in user (elevated), so it runs as them, only while they're signed in.
 	out, err := exec.Command("schtasks", "/Create", "/F", "/TN", taskName, "/SC", "ONLOGON", "/RL", "HIGHEST", "/TR", tr).CombinedOutput()
@@ -331,7 +463,43 @@ func installElevated() int {
 		fmt.Sprintf(`$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Set-ScheduledTask -TaskName '%s' -Settings $s`, taskName)).Run()
 	addFirewallRule(exe, cfg)
 	removeRunKey()
+	if err := installService(exe); err != nil {
+		log.Printf("service setup failed: %v", err)
+		return 3
+	}
+	log.Print("installed: service running")
 	return 0
+}
+
+// migrateConfig moves this user's settings to the shared ProgramData folder and locks it down
+// (administrators and SYSTEM can change it; other users can only read it).
+func migrateConfig() error {
+	dir := machineConfigDir()
+	user := filepath.Join(userConfigDir(), "config.json")
+	machine := filepath.Join(dir, "config.json")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	exec.Command("icacls", dir, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+		"*S-1-5-32-545:(OI)(CI)RX").Run()
+	us, uerr := os.Stat(user)
+	ms, merr := os.Stat(machine)
+	if uerr != nil || (merr == nil && !us.ModTime().After(ms.ModTime())) {
+		if merr != nil {
+			return fmt.Errorf("no settings found")
+		}
+		return nil
+	}
+	b, err := os.ReadFile(user)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(machine, b, 0o600); err != nil {
+		return err
+	}
+	os.Remove(user)
+	log.Printf("settings moved to %s", machine)
+	return nil
 }
 
 // firewallElevated runs as administrator after the tray's Wi-Fi switch changes the setting.
@@ -552,6 +720,9 @@ func showMenu() {
 	case menuLog:
 		exec.Command("notepad", filepath.Join(configDir(), "receiver.log")).Start()
 	case menuQuit:
+		if serviceMode && setServiceRunning(false) != nil {
+			runElevated(exe, "--service-off")
+		}
 		pShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&trayData)))
 		os.Exit(0)
 	}

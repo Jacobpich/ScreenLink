@@ -75,7 +75,12 @@ func metric(i int) int {
 	return int(int32(r))
 }
 
-func (p *winPlatform) Capture() ([]byte, int, int, error) {
+func (p *winPlatform) Capture() (px []byte, w, h int, err error) {
+	desk.do(func() { px, w, h, err = p.capture() })
+	return
+}
+
+func (p *winPlatform) capture() ([]byte, int, int, error) {
 	p.capMu.Lock()
 	defer p.capMu.Unlock()
 	vx, vy := metric(smXVirtualScreen), metric(smYVirtualScreen)
@@ -118,7 +123,12 @@ var (
 	})
 )
 
-func (p *winPlatform) Monitors() []Rect {
+func (p *winPlatform) Monitors() (r []Rect) {
+	desk.do(func() { r = p.monitors() })
+	return
+}
+
+func (p *winPlatform) monitors() []Rect {
 	monMu.Lock()
 	defer monMu.Unlock()
 	if p.monCache != nil && time.Since(p.monChecked) < time.Second {
@@ -143,7 +153,12 @@ func (p *winPlatform) Monitors() []Rect {
 
 // Cursor reads the pointer shape. Drawing it once on black and once on white recovers its
 // alpha, and also catches classic "inverting" cursors such as the text I-beam.
-func (p *winPlatform) Cursor() (*Cursor, uint64) {
+func (p *winPlatform) Cursor() (c *Cursor, serial uint64) {
+	desk.do(func() { c, serial = p.cursor() })
+	return
+}
+
+func (p *winPlatform) cursor() (*Cursor, uint64) {
 	p.curMu.Lock()
 	defer p.curMu.Unlock()
 	ci := cursorInfo{Size: uint32(unsafe.Sizeof(cursorInfo{}))}
@@ -255,7 +270,7 @@ func (p *winPlatform) MovePointer(x, y int) {
 	p.capMu.Lock()
 	vx, vy := p.vx, p.vy
 	p.capMu.Unlock()
-	pSetCursorPos.Call(uintptr(int32(x+vx)), uintptr(int32(y+vy)))
+	desk.do(func() { pSetCursorPos.Call(uintptr(int32(x+vx)), uintptr(int32(y+vy))) })
 }
 
 func sendMouse(flags uint32, data int32) {
@@ -269,17 +284,19 @@ func (p *winPlatform) Button(b int, down bool) {
 	if down {
 		d = 1
 	}
-	sendMouse(flags[b][d], 0)
+	desk.do(func() { sendMouse(flags[b][d], 0) })
 }
 
 func (p *winPlatform) Wheel(dx, dy int) {
 	step := p.cfg.ScrollStep
-	if dy != 0 {
-		sendMouse(mouseWheel, int32(dy*step))
-	}
-	if dx != 0 {
-		sendMouse(mouseHWheel, int32(dx*step))
-	}
+	desk.do(func() {
+		if dy != 0 {
+			sendMouse(mouseWheel, int32(dy*step))
+		}
+		if dx != 0 {
+			sendMouse(mouseHWheel, int32(dx*step))
+		}
+	})
 }
 
 func sendKey(vk, scan uint16, flags uint32) {
@@ -288,7 +305,11 @@ func sendKey(vk, scan uint16, flags uint32) {
 }
 
 func (p *winPlatform) Key(vk uint16, down bool) {
-	scan, _, _ := pMapVirtualKeyW.Call(uintptr(vk), 0)
+	desk.do(func() { p.key(vk, down) })
+}
+
+func (p *winPlatform) key(vk uint16, down bool) {
+	scan, _, _ := pMapVirtualKeyExW.Call(uintptr(vk), 0, foregroundLayout())
 	var flags uint32
 	if isExtendedVK(vk) {
 		flags |= keyExtended
@@ -300,6 +321,10 @@ func (p *winPlatform) Key(vk uint16, down bool) {
 }
 
 func (p *winPlatform) Unicode(r rune, down bool) {
+	desk.do(func() { p.unicode(r, down) })
+}
+
+func (p *winPlatform) unicode(r rune, down bool) {
 	var flags uint32 = keyUnicode
 	if !down {
 		flags |= keyUp
@@ -313,11 +338,16 @@ func (p *winPlatform) Unicode(r rune, down bool) {
 	sendKey(0, uint16(r), flags)
 }
 
-func (p *winPlatform) CharKey(r rune) (uint16, bool, bool) {
+func (p *winPlatform) CharKey(r rune) (vk uint16, shift bool, ok bool) {
+	desk.do(func() { vk, shift, ok = p.charKey(r) })
+	return
+}
+
+func (p *winPlatform) charKey(r rune) (uint16, bool, bool) {
 	if r > 0xFFFF {
 		return 0, false, false
 	}
-	v, _, _ := pVkKeyScanW.Call(uintptr(r))
+	v, _, _ := pVkKeyScanExW.Call(uintptr(r), foregroundLayout())
 	s := int16(v)
 	if s == -1 {
 		return 0, false, false
@@ -327,7 +357,7 @@ func (p *winPlatform) CharKey(r rune) (uint16, bool, bool) {
 
 func openClipboard() bool {
 	for i := 0; i < 10; i++ {
-		if r, _, _ := pOpenClipboard.Call(trayHwnd); r != 0 {
+		if r, _, _ := pOpenClipboard.Call(clipOwner()); r != 0 {
 			return true
 		}
 		time.Sleep(20 * time.Millisecond)
