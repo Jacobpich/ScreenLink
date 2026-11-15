@@ -22,20 +22,20 @@ struct HostEditorView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Name (e.g. Mac Studio)", text: $host.name)
+                    TextField("Name (e.g. Mac Studio or Gaming PC)", text: $host.name)
                     TextField("Tailscale name or IP", text: $host.address)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                         .onChange(of: host.address) { _, _ in testResult = nil }
                 } header: {
-                    Text("Mac")
+                    Text("Computer")
                 } footer: {
-                    Text("Use the Mac's Tailscale machine name (like **mac-studio**), its MagicDNS name, or its **100.x.y.z** address from the Tailscale app.")
+                    Text("Use the computer's Tailscale machine name (like **mac-studio**), its MagicDNS name, or its **100.x.y.z** address from the Tailscale app. For a Windows PC, install ScreenLink Receiver on it first.")
                 }
 
                 Section {
-                    TextField("Mac username", text: $host.username)
+                    TextField("Username", text: $host.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textContentType(.username)
@@ -44,7 +44,7 @@ struct HostEditorView: View {
                 } header: {
                     Text("Sign in")
                 } footer: {
-                    Text("The account name and password you log in to the Mac with. The password is stored in this iPhone's Keychain. Leave it blank to be asked each time.")
+                    Text("Mac: the account name and password you log in with. Windows PC: the password you chose in ScreenLink Receiver (any username works). The password is stored in this iPhone's Keychain. Leave it blank to be asked each time.")
                 }
 
                 Section("Picture") {
@@ -86,14 +86,14 @@ struct HostEditorView: View {
 
                 if !isNew {
                     Section {
-                        Button("Delete Mac", role: .destructive) {
+                        Button("Delete Computer", role: .destructive) {
                             store.delete(host)
                             dismiss()
                         }
                     }
                 }
             }
-            .navigationTitle(isNew ? "Add Mac" : "Edit Mac")
+            .navigationTitle(isNew ? "Add Computer" : "Edit Computer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

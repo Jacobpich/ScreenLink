@@ -47,12 +47,12 @@ struct HostListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button(action: addNew) { Label("Add Mac Manually", systemImage: "plus") }
+                        Button(action: addNew) { Label("Add Computer Manually", systemImage: "plus") }
                         Button { showDiscovery = true } label: { Label("Find on Tailscale", systemImage: "network") }
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Add Mac")
+                    .accessibilityLabel("Add Computer")
                 }
             }
             .sheet(item: $editing) { host in
@@ -83,13 +83,13 @@ struct HostListView: View {
             .onAppear {
                 store.probeAll()
                 #if DEBUG
-                // Dev hook: SCREENLINK_AUTOCONNECT=host:port opens a session directly.
+                // Dev hook: SCREENLINK_AUTOCONNECT=host:port (+ SCREENLINK_PASSWORD) opens a session directly.
                 if let target = ProcessInfo.processInfo.environment["SCREENLINK_AUTOCONNECT"] {
                     let parts = target.split(separator: ":")
                     var h = SavedHost(name: "Debug", address: String(parts[0]))
                     if parts.count > 1 { h.port = Int(parts[1]) ?? 5900 }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        SessionPresenter.present(h, password: "")
+                        SessionPresenter.present(h, password: ProcessInfo.processInfo.environment["SCREENLINK_PASSWORD"] ?? "")
                     }
                 }
                 #endif
@@ -174,26 +174,26 @@ private struct EmptyStateView: View {
                     .foregroundStyle(.tint)
                     .padding(.top, 40)
                 VStack(spacing: 8) {
-                    Text("Control your Mac from anywhere").font(.title2.bold()).multilineTextAlignment(.center)
-                    Text("ScreenLink connects to macOS Screen Sharing over Tailscale.")
+                    Text("Control your Mac or PC from anywhere").font(.title2.bold()).multilineTextAlignment(.center)
+                    Text("ScreenLink connects to macOS Screen Sharing, or to ScreenLink Receiver on Windows, over Tailscale.")
                         .foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 VStack(alignment: .leading, spacing: 16) {
-                    step(1, "On your Mac, open System Settings → General → Sharing and turn on **Screen Sharing**.")
-                    step(2, "Make sure **Tailscale** is running on the Mac and connected on this iPhone.")
-                    step(3, "Add the Mac using its Tailscale name (like `mac-studio`) or its 100.x.y.z address.")
+                    step(1, "On a Mac, open System Settings → General → Sharing and turn on **Screen Sharing**. On a Windows PC, run **ScreenLink Receiver** and choose a password.")
+                    step(2, "Make sure **Tailscale** is running on the computer and connected on this iPhone.")
+                    step(3, "Add the computer using its Tailscale name (like `mac-studio`) or its 100.x.y.z address.")
                 }
                 .padding(20)
                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
 
                 VStack(spacing: 12) {
                     Button(action: addManually) {
-                        Label("Add Mac", systemImage: "plus").frame(maxWidth: .infinity)
+                        Label("Add Computer", systemImage: "plus").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     Button(action: discover) {
-                        Label("Find Macs on Tailscale", systemImage: "network").frame(maxWidth: .infinity)
+                        Label("Find Computers on Tailscale", systemImage: "network").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
@@ -229,14 +229,14 @@ private struct PasswordPrompt: View {
             Form {
                 Section {
                     LabeledContent("User", value: host.username.isEmpty ? "—" : host.username)
-                    SecureField("Mac password", text: $password)
+                    SecureField("Password", text: $password)
                         .focused($focused)
                         .textContentType(.password)
                         .submitLabel(.go)
                         .onSubmit(go)
                     Toggle("Remember in Keychain", isOn: $remember)
                 } footer: {
-                    Text("This is the password you use to log in to \(host.name.isEmpty ? "the Mac" : host.name).")
+                    Text("The password for \(host.name.isEmpty ? "this computer" : host.name): your Mac login password, or the one you chose in ScreenLink Receiver on a PC.")
                 }
             }
             .navigationTitle("Sign In")

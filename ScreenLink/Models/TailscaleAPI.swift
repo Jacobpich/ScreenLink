@@ -15,6 +15,7 @@ struct TailscaleDevice: Identifiable, Decodable, Hashable {
     var shortName: String { name.split(separator: ".").first.map(String.init) ?? hostname }
     var ipv4: String? { addresses.first { $0.contains(".") } }
     var isMac: Bool { os.lowercased() == "macos" }
+    var isWindows: Bool { os.lowercased() == "windows" }
 
     var isOnline: Bool {
         if let c = connectedToControl { return c }

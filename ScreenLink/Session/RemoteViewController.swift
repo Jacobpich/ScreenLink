@@ -255,6 +255,7 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
             self.everConnected = true
             self.retryCount = 0
             self.model.desktopName = name
+            self.model.isPC = !c.serverIsApple
             self.model.state = .connected
             self.applySize(CGSize(width: framebuffer.width, height: framebuffer.height), resetCursor: firstTime)
             HostStore.shared.markConnected(self.host.id)
@@ -833,17 +834,17 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
     private func macSwipe(_ dir: MacSwipe) {
         switch dir {
         case .up:
-            if expose == .appExpose { sendShortcut(Keysym.down, modifiers: [Keysym.control]); expose = .none; model.flash("Close App Exposé") }
-            else if expose == .none { sendShortcut(Keysym.up, modifiers: [Keysym.control]); expose = .missionControl; model.flash("Mission Control") }
+            if expose == .appExpose { sendShortcut(Keysym.down, modifiers: [Keysym.control]); expose = .none; model.flash(model.isPC ? "Close Task View" : "Close App Exposé") }
+            else if expose == .none { sendShortcut(Keysym.up, modifiers: [Keysym.control]); expose = .missionControl; model.flash(model.isPC ? "Task View" : "Mission Control") }
         case .down:
-            if expose == .missionControl { sendShortcut(Keysym.up, modifiers: [Keysym.control]); expose = .none; model.flash("Close Mission Control") }
-            else if expose == .none { sendShortcut(Keysym.down, modifiers: [Keysym.control]); expose = .appExpose; model.flash("App Exposé") }
+            if expose == .missionControl { sendShortcut(Keysym.up, modifiers: [Keysym.control]); expose = .none; model.flash(model.isPC ? "Close Task View" : "Close Mission Control") }
+            else if expose == .none { sendShortcut(Keysym.down, modifiers: [Keysym.control]); expose = .appExpose; model.flash(model.isPC ? "Task View" : "App Exposé") }
         case .left:
             sendShortcut(Keysym.right, modifiers: [Keysym.control])
-            model.flash("Next Space  →")
+            model.flash(model.isPC ? "Next Desktop  →" : "Next Space  →")
         case .right:
             sendShortcut(Keysym.left, modifiers: [Keysym.control])
-            model.flash("←  Previous Space")
+            model.flash(model.isPC ? "←  Previous Desktop" : "←  Previous Space")
         }
     }
 
@@ -855,6 +856,17 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
             cursorPos = remotePoint(g.location(in: mtkView))
             sendMove()
             refreshView()
+        }
+        if model.isPC {   // Windows has no Look Up; a right-click shows the word's options
+            let p = (x: Int(cursorPos.x.rounded()), y: Int(cursorPos.y.rounded()))
+            if let c = connection {
+                inputQueue.async {
+                    c.setButton(4, down: true, x: p.x, y: p.y)
+                    c.setButton(4, down: false, x: p.x, y: p.y)
+                }
+            }
+            model.flash("Right-Click")
+            return
         }
         sendShortcut(UInt32(0x64), modifiers: [Keysym.control, Keysym.command])
         model.flash("Look Up")
@@ -874,7 +886,8 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
             let ratio = touchSpread(g) / fourSpreadStart
             if ratio > 1.35 {
                 multiFired = true
-                sendShortcut(Keysym.function(11), modifiers: [])     // Show Desktop
+                if model.isPC { sendShortcut(UInt32(0x64), modifiers: [Keysym.superL]) }   // Win+D
+                else { sendShortcut(Keysym.function(11), modifiers: []) }                // Show Desktop
                 model.flash("Show Desktop")
             } else if ratio < 0.72 {
                 multiFired = true
@@ -909,6 +922,11 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
     /// The Mac's thumb-and-three-finger pinch opens Apps (formerly Launchpad).
     private func showApps() {
         guard let c = connection else { return }
+        if model.isPC {
+            sendShortcut(Keysym.superL, modifiers: [])
+            model.flash("Start")
+            return
+        }
         inputQueue.async {
             c.tapKey(Keysym.space, modifiers: [Keysym.command])
             Thread.sleep(forTimeInterval: 0.25)
@@ -931,6 +949,11 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
         case .changed:
             guard !edgeFired, g.translation(in: mtkView).x < -50, fbSize.width > 0, let c = connection else { return }
             edgeFired = true
+            if model.isPC {   // Windows: notification center is Win+N
+                sendShortcut(UInt32(0x6E), modifiers: [Keysym.superL])
+                model.flash("Notifications")
+                return
+            }
             // macOS has no default shortcut for Notification Center, so click the menu-bar clock.
             let r = model.selectedDisplay.flatMap { model.displays.indices.contains($0) ? model.displays[$0] : nil }
                 ?? model.displays.first ?? fullRect
@@ -1233,7 +1256,7 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
             Thread.sleep(forTimeInterval: 0.25)
             c.tapKey(0x76, modifiers: [Keysym.command])
         }
-        model.flash("Pasted on Mac")
+        model.flash("Pasted on \(model.computer)")
     }
 
     func typeClipboard() {

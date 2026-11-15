@@ -30,6 +30,9 @@ final class SessionModel: ObservableObject {
     @Published var displayLayoutIsManual = false
     @Published var signInUser = ""
     @Published var loadingStatus: String?
+    /// Connected to a Windows PC (ScreenLink Receiver) rather than a Mac.
+    @Published var isPC = false
+    var computer: String { isPC ? "PC" : "Mac" }
 
     weak var controller: RemoteViewController?
     let hostName: String
@@ -159,6 +162,19 @@ struct SessionToolbar: View {
 
     private var shortcutsMenu: some View {
         Menu {
+            if model.isPC {
+                Section("PC shortcuts") {
+                    shortcut("Task View", "rectangle.3.group", Keysym.tab, [Keysym.superL])
+                    shortcut("Start", "square.grid.2x2", Keysym.superL, [])
+                    shortcut("Show Desktop", "menubar.dock.rectangle", UInt32(0x64), [Keysym.superL])
+                    shortcut("File Explorer", "folder", UInt32(0x65), [Keysym.superL])
+                    shortcut("Settings", "gearshape", UInt32(0x69), [Keysym.superL])
+                    shortcut("Close Window (Alt+F4)", "xmark.rectangle", Keysym.function(4), [Keysym.option])
+                    shortcut("Task Manager", "exclamationmark.octagon", Keysym.escape, [Keysym.control, Keysym.shift])
+                    shortcut("Screenshot Area", "camera.viewfinder", UInt32(0x73), [Keysym.superL, Keysym.shift])
+                    shortcut("Lock PC", "lock", UInt32(0x6C), [Keysym.superL])
+                }
+            } else {
             Section("Mac shortcuts") {
                 shortcut("Mission Control", "rectangle.3.group", Keysym.up, [Keysym.control])
                 shortcut("App Switcher (⌘⇥)", "square.on.square", Keysym.tab, [Keysym.command])
@@ -172,9 +188,10 @@ struct SessionToolbar: View {
                 shortcut("Screenshot Area (⌘⇧4)", "camera.viewfinder", UInt32(0x34), [Keysym.command, Keysym.shift])
                 shortcut("Lock Screen (⌃⌘Q)", "lock", UInt32(0x71), [Keysym.control, Keysym.command])
             }
+            }
             Section("Clipboard") {
                 Button { model.controller?.pasteToMac() } label: {
-                    Label("Paste iPhone Clipboard on Mac", systemImage: "doc.on.clipboard")
+                    Label("Paste iPhone Clipboard on \(model.computer)", systemImage: "doc.on.clipboard")
                 }
                 Button { model.controller?.typeClipboard() } label: {
                     Label("Type iPhone Clipboard", systemImage: "character.cursor.ibeam")
@@ -359,9 +376,11 @@ private struct SignInCard: View {
         VStack(spacing: 12) {
             Image(systemName: "lock.fill").font(.system(size: 30)).foregroundStyle(.yellow)
             Text("Sign In to \(model.hostName)").font(.headline)
-            Text("The Mac didn't accept the saved password. If you changed your Mac's password, enter the new one.")
+            Text(model.isPC
+                 ? "The PC didn't accept the saved password. Enter the password you chose in ScreenLink Receiver."
+                 : "The Mac didn't accept the saved password. If you changed your Mac's password, enter the new one.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            TextField("Mac username", text: $user)
+            TextField(model.isPC ? "Username (any)" : "Mac username", text: $user)
                 .textContentType(.username)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

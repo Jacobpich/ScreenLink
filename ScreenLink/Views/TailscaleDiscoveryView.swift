@@ -42,8 +42,8 @@ struct TailscaleDiscoveryView: View {
             Section {
                 VStack(alignment: .leading, spacing: 10) {
                     Image(systemName: "network").font(.largeTitle).foregroundStyle(.tint)
-                    Text("List the Macs in your tailnet").font(.headline)
-                    Text("Tailscale doesn't let other apps see your devices directly, so ScreenLink can use a Tailscale API access token to list them. It's optional — you can always type the Mac's Tailscale name instead.")
+                    Text("List the computers in your tailnet").font(.headline)
+                    Text("Tailscale doesn't let other apps see your devices directly, so ScreenLink can use a Tailscale API access token to list them. It's optional — you can always type the computer's Tailscale name instead.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 6)
@@ -80,9 +80,19 @@ struct TailscaleDiscoveryView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
             }
             let macs = devices.filter(\.isMac)
-            let others = devices.filter { !$0.isMac }
+            let pcs = devices.filter(\.isWindows)
+            let others = devices.filter { !$0.isMac && !$0.isWindows }
             if !macs.isEmpty {
                 Section("Macs") { ForEach(macs) { row($0) } }
+            }
+            if !pcs.isEmpty {
+                Section {
+                    ForEach(pcs) { row($0) }
+                } header: {
+                    Text("Windows PCs")
+                } footer: {
+                    Text("PCs need ScreenLink Receiver running.")
+                }
             }
             if !others.isEmpty {
                 Section("Other devices") { ForEach(others) { row($0) } }
@@ -94,7 +104,7 @@ struct TailscaleDiscoveryView: View {
     private func row(_ d: TailscaleDevice) -> some View {
         Button { onPick(d) } label: {
             HStack(spacing: 12) {
-                Image(systemName: d.isMac ? "desktopcomputer" : "server.rack")
+                Image(systemName: d.isMac ? "desktopcomputer" : d.isWindows ? "pc" : "server.rack")
                     .font(.title3)
                     .frame(width: 32)
                     .foregroundStyle(.tint)

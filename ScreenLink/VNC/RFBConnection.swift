@@ -79,6 +79,9 @@ final class RFBConnection {
 
     // Stats
     private(set) var framesReceived = 0
+    /// macOS Screen Sharing announces protocol 3.889; anything else (like ScreenLink Receiver
+    /// on Windows) is treated as a PC: Windows shortcuts instead of Mac ones.
+    private(set) var serverIsApple = true
     private var lastRequest = CFAbsoluteTimeGetCurrent()
     private(set) var lastRoundTrip: Double = 0
     var bytesReceived: Int { socket.bytesReceived }
@@ -127,6 +130,7 @@ final class RFBConnection {
         let versionBytes = try socket.readBytes(12)
         let version = String(bytes: versionBytes, encoding: .ascii) ?? ""
         ConnLog.write("server version \(version.trimmingCharacters(in: .whitespacesAndNewlines))")
+        serverIsApple = version.hasPrefix("RFB 003.889")
         guard version.hasPrefix("RFB ") else { throw SocketError.io("Not a Screen Sharing server (\(version.trimmingCharacters(in: .whitespacesAndNewlines))).") }
         // macOS reports "RFB 003.889"; we speak 3.8.
         try socket.write(Array("RFB 003.008\n".utf8))
@@ -140,7 +144,9 @@ final class RFBConnection {
         let types = try socket.readBytes(count)
         ConnLog.write("security types \(types)")
 
-        let hasUser = !config.username.isEmpty
+        // ScreenLink Receiver only checks the password, so any username will do there.
+        let username = config.username.isEmpty && !serverIsApple ? "screenlink" : config.username
+        let hasUser = !username.isEmpty
         let choice: UInt8
         if types.contains(30) && hasUser { choice = 30 }
         else if types.contains(2) && !config.password.isEmpty { choice = 2 }
@@ -158,7 +164,7 @@ final class RFBConnection {
             let prime = try socket.readBytes(keyLen)
             let serverKey = try socket.readBytes(keyLen)
             let resp = try AppleAuth.response(generator: gen, prime: prime, serverPublic: serverKey,
-                                              username: config.username, password: config.password)
+                                              username: username, password: config.password)
             try socket.write(resp)
         case 2:
             let challenge = try socket.readBytes(16)
