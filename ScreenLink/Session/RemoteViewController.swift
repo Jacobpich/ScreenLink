@@ -276,9 +276,10 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.markActive()
-            if self.needsDisplayDetection {
+            // Only once the whole picture is in; earlier, the edge of the loaded part looks like a seam.
+            if self.needsDisplayDetection && c.hasFullPicture {
                 self.needsDisplayDetection = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.detectDisplays(retry: true) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.detectDisplays(retry: true) }
             }
         }
     }

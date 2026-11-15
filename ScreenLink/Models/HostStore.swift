@@ -39,6 +39,16 @@ final class HostStore: ObservableObject {
     private let key = "savedHosts.v1"
 
     private init() {
+        // One-time: forget display layouts saved before detection waited for the full picture.
+        // Those were often a wrong automatic split, or "2 Side by Side" picked to work around it.
+        let d = UserDefaults.standard
+        if !d.bool(forKey: "displayLayoutsReset.v2") {
+            for key in d.dictionaryRepresentation().keys
+            where key.hasPrefix("displayLayout.") || key.hasPrefix("displaySelection.") {
+                d.removeObject(forKey: key)
+            }
+            d.set(true, forKey: "displayLayoutsReset.v2")
+        }
         if let data = UserDefaults.standard.data(forKey: key),
            let decoded = try? JSONDecoder().decode([SavedHost].self, from: data) {
             hosts = decoded

@@ -258,10 +258,11 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
 
     /// Runs on the main thread after picture updates have been drawn.
     private func afterUpdate() {
-        guard needsDisplayDetection, fbSize.width > 0 else { return }
+        // Wait for the whole picture: a Mac's multi-display picture loads in over a second or more,
+        // and looking earlier finds a false edge where the loaded part ends.
+        guard needsDisplayDetection, fbSize.width > 0, connection?.hasFullPicture == true else { return }
         needsDisplayDetection = false
-        // Give the first full picture a moment to arrive, then look for the displays in it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.detectDisplays(retry: true) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.detectDisplays(retry: true) }
     }
 
     func rfb(_ c: RFBConnection, cursorChanged cursor: CursorImage?) {

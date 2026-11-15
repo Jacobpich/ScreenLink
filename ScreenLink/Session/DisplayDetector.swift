@@ -83,18 +83,25 @@ enum DisplayDetector {
         let start = vertical ? x0 + span * 15 / 100 : y0 + span * 15 / 100
         let end = vertical ? x0 + span * 85 / 100 : y0 + span * 85 / 100
         for c in start..<end {
-            var hits = 0
+            var hits = 0, filler = 0
             var i = 0
             var t = vertical ? y0 : x0
             while i < samples {
                 let a: UInt32, b: UInt32
                 if vertical { a = px[t * w + c - 1]; b = px[t * w + c] }
                 else { a = px[(c - 1) * w + t]; b = px[c * w + t] }
-                if isBlack(a) != isBlack(b) || diff(a, b) > 60 { hits += 1 }
+                if isFiller(a) != isFiller(b) { filler += 1; hits += 1 }
+                else if isBlack(a) != isBlack(b) || diff(a, b) > 60 { hits += 1 }
                 i += 1
                 t += step
             }
-            let score = Double(hits) / Double(max(1, samples))
+            var score = Double(hits) / Double(max(1, samples))
+            // A shorter display next to a taller one: along part of the line, one side is the pure
+            // black filler. That's a seam even where the two pictures happen to match.
+            let fillerFrac = Double(filler) / Double(max(1, samples))
+            if fillerFrac >= 0.2 && score >= 0.45 && fillerRunsToEdge(fb, r, c, vertical: vertical) {
+                score = 1 + fillerFrac   // beats a nearby edge in the picture itself
+            }
             if score > bestScore {
                 // Both halves must look like real displays.
                 let ra: CGRect, rb: CGRect
@@ -112,6 +119,38 @@ enum DisplayDetector {
             }
         }
         return best >= 0 ? best : nil
+    }
+
+    /// Screen Sharing pads smaller displays with exact black.
+    @inline(__always)
+    private static func isFiller(_ p: UInt32) -> Bool { p & 0x00FF_FFFF == 0 }
+
+    /// True when, on one side of the line, a solid block of filler reaches the region's edge
+    /// (below or above a shorter display), and the other side has picture there.
+    private static func fillerRunsToEdge(_ fb: Framebuffer, _ r: CGRect, _ c: Int, vertical: Bool) -> Bool {
+        let px = fb.pixels, w = fb.width
+        let lo = vertical ? Int(r.minY) : Int(r.minX), hi = vertical ? Int(r.maxY) : Int(r.maxX)
+        let sideA = vertical ? (Int(r.minX), c) : (Int(r.minY), c)
+        let sideB = vertical ? (c, Int(r.maxX)) : (c, Int(r.maxY))
+        // Fraction of filler across one side's whole width at line position t (sampled).
+        func fillerAcross(_ side: (Int, Int), _ t: Int) -> Double {
+            let step = max(1, (side.1 - side.0) / 64)
+            var f = 0, n = 0
+            var s = side.0
+            while s < side.1 {
+                let p = vertical ? px[t * w + s] : px[s * w + t]
+                if isFiller(p) { f += 1 }
+                n += 1
+                s += step
+            }
+            return Double(f) / Double(max(1, n))
+        }
+        let probe = max(8, (hi - lo) / 50)
+        for edge in [hi - 1 - probe / 2, lo + probe / 2] {   // near the bottom/right, then the top/left
+            let a = fillerAcross(sideA, edge), b = fillerAcross(sideB, edge)
+            if (a > 0.995 && b < 0.5) || (b > 0.995 && a < 0.5) { return true }
+        }
+        return false
     }
 
     /// Removes rows/columns at the edges that are (almost) entirely black filler.
