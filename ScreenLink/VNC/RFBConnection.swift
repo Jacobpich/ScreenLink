@@ -75,6 +75,7 @@ final class RFBConnection {
     /// A pixel that's on a real display (guarded by `out`). With displays of different sizes the
     /// picture has filler macOS never sends, and a 1-pixel request there is never answered.
     private var pingTarget: (x: Int, y: Int)?
+    private var updateRegion: CGRect?         // guarded by `out`
 
     // Health watchdog
     private var lastProgressBytes = -1
@@ -260,10 +261,35 @@ final class RFBConnection {
 
     private func requestUpdate(incremental: Bool) {
         guard let fb = framebuffer else { return }
-        var m: [UInt8] = [3, incremental ? 1 : 0, 0, 0, 0, 0]
-        m.appendU16(UInt16(fb.width)); m.appendU16(UInt16(fb.height))
+        let full = CGRect(x: 0, y: 0, width: fb.width, height: fb.height)
+        out.lock(); let shown = incremental ? updateRegion : nil; out.unlock()
+        let r = shown.map { $0.intersection(full) }.flatMap { $0.isEmpty ? nil : $0 } ?? full
         lastRequest = CFAbsoluteTimeGetCurrent()
-        enqueue(m)
+        enqueue(updateRequest(incremental: incremental, r))
+    }
+
+    private func updateRequest(incremental: Bool, _ r: CGRect) -> [UInt8] {
+        var m: [UInt8] = [3, incremental ? 1 : 0]
+        m.appendU16(UInt16(r.minX)); m.appendU16(UInt16(r.minY))
+        m.appendU16(UInt16(r.width)); m.appendU16(UInt16(r.height))
+        return m
+    }
+
+    /// Only ask a Mac for changes inside this rectangle (the one display being shown), or the
+    /// whole picture when nil. macOS sends every display otherwise, so showing one display of
+    /// two still paid for both. Asks once for a fresh copy of the newly shown area, since changes
+    /// outside the old region weren't sent.
+    func setUpdateRegion(_ region: CGRect?) {
+        guard serverIsApple, let fb = framebuffer else { return }
+        let full = CGRect(x: 0, y: 0, width: fb.width, height: fb.height)
+        let r = region.map { $0.integral.intersection(full) }.flatMap { $0.isEmpty || $0 == full ? nil : $0 }
+        out.lock()
+        let changed = r != updateRegion
+        updateRegion = r
+        out.unlock()
+        guard changed else { return }
+        ConnLog.write("update region \(r.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "all")")
+        enqueue(updateRequest(incremental: false, r ?? full))
     }
 
     private func readServerMessage() throws {

@@ -399,6 +399,7 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
         UserDefaults.standard.set(index ?? -1, forKey: selectionKey)
         visible = index.map { displays[$0].intersection(fullRect) } ?? fullRect
         if visible.isEmpty { visible = fullRect }
+        connection?.setUpdateRegion(visible == fullRect ? nil : visible)
         updateAspect()
         sizeWindowToFit()
         layout()

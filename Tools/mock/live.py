@@ -92,6 +92,7 @@ def serve(s):
         elif t==3:
             m=rd(9)
             inc=m[0]; rx,ry,rw,rh=struct.unpack(">HHHH",m[1:])
+            if REALMAC and not (rw==1 and rh==1): print("req", "inc" if inc else "full", rx,ry,rw,rh, flush=True)
             if not first[0] and not inc and rw==1 and rh==1:
                 # Answer flow-control pings immediately, like the real server; the real Mac
                 # never answers for filler that isn't on any display.

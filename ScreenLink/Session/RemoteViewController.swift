@@ -1283,6 +1283,7 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
         stopMomentum()
         userZoomed = false
         let r = region
+        connection?.setUpdateRegion(index == nil ? nil : r)
         if !r.contains(cursorPos) {
             cursorPos = CGPoint(x: r.midX, y: r.midY)
             sendMove()
