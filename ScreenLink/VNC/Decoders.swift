@@ -46,6 +46,7 @@ final class RectDecoder {
     deinit {
         scratch.deallocate()
         bytes.deallocate()
+        zOut.deallocate()
     }
 
     private func scratchPixels(_ n: Int) -> UnsafeMutablePointer<UInt32> {
@@ -164,76 +165,134 @@ final class RectDecoder {
 
     // MARK: ZRLE
 
+    /// Called while a large rectangle is still arriving, with the part already decoded, so the
+    /// screen paints in progressively instead of staying black until the whole frame is in.
+    var onProgress: ((CGRect) -> Void)?
+
+    private var zOut = UnsafeMutablePointer<UInt8>.allocate(capacity: 1 << 20)
+    private var zOutCap = 1 << 20
+
+    /// ZRLE is decoded as it streams in: compressed data is read in chunks and tiles are drawn
+    /// as soon as their bytes have arrived (a full 5K+ desktop can be tens of megabytes).
     func zrle(x: Int, y: Int, w: Int, h: Int) throws {
-        let len = Int(try s.readU32())
-        let input = scratchBytes(len)
-        try s.read(into: input, count: len)
-        let produced = try zrleStream.inflateAll(input, count: len)
-        var r = ByteReader(base: zrleStream.output, count: produced)
+        var remaining = Int(try s.readU32())
+        let chunkCap = 256 * 1024
+        let chunk = scratchBytes(chunkCap)
+        var outLen = 0, parsePos = 0
+
+        // Brings in more decompressed data. Returns false when the rectangle's data is used up.
+        func pull() throws -> Bool {
+            if parsePos > 0 {
+                let keep = outLen - parsePos
+                if keep > 0 { memmove(zOut, zOut + parsePos, keep) }
+                outLen = keep
+                parsePos = 0
+            }
+            if zrleStream.pendingInput == 0 {
+                guard remaining > 0 else { return false }
+                let n = min(remaining, chunkCap)
+                try s.read(into: chunk, count: n)
+                remaining -= n
+                try zrleStream.feed(chunk, count: n)
+            }
+            if zOutCap - outLen < 64 * 1024 {
+                let cap = zOutCap * 2
+                let bigger = UnsafeMutablePointer<UInt8>.allocate(capacity: cap)
+                bigger.update(from: zOut, count: outLen)
+                zOut.deallocate()
+                zOut = bigger
+                zOutCap = cap
+            }
+            outLen = try zrleStream.inflateSome(into: zOut, cap: zOutCap, len: outLen)
+            return true
+        }
 
         var palette = [UInt32](repeating: 0, count: 128)
+        var notifiedY = y
+        var lastNotify = CFAbsoluteTimeGetCurrent()
         var ty = y
         while ty < y + h {
             let th = min(64, y + h - ty)
             var tx = x
             while tx < x + w {
                 let tw = min(64, x + w - tx)
-                let sub = Int(try r.u8())
-                let tile = scratchPixels(tw * th)
-                let n = tw * th
-
-                if sub == 0 {
-                    for i in 0..<n { tile[i] = try r.cpixel() }
-                } else if sub == 1 {
-                    let c = try r.cpixel()
-                    fb.fill(x: tx, y: ty, w: tw, h: th, color: c)
-                    tx += 64
-                    continue
-                } else if sub >= 2 && sub <= 16 {
-                    for i in 0..<sub { palette[i] = try r.cpixel() }
-                    let bits = sub == 2 ? 1 : (sub <= 4 ? 2 : 4)
-                    let mask = (1 << bits) - 1
-                    for row in 0..<th {
-                        var byte = 0, nbits = 0
-                        for col in 0..<tw {
-                            if nbits == 0 { byte = Int(try r.u8()); nbits = 8 }
-                            nbits -= bits
-                            tile[row * tw + col] = palette[(byte >> nbits) & mask]
-                        }
+                while true {
+                    var r = ByteReader(base: zOut + parsePos, count: outLen - parsePos)
+                    do {
+                        try zrleTile(&r, tx: tx, ty: ty, tw: tw, th: th, palette: &palette)
+                        parsePos += r.pos
+                        break
+                    } catch is NeedMoreData {
+                        guard try pull() else { throw SocketError.io("Truncated compressed data") }
                     }
-                } else if sub == 128 {
-                    var i = 0
-                    while i < n {
-                        let c = try r.cpixel()
-                        var run = 1
-                        while true { let b = Int(try r.u8()); run += b; if b != 255 { break } }
-                        let end = min(n, i + run)
-                        (tile + i).update(repeating: c, count: end - i)
-                        i = end
-                    }
-                } else if sub >= 130 {
-                    let psize = sub - 128
-                    for i in 0..<psize { palette[i] = try r.cpixel() }
-                    var i = 0
-                    while i < n {
-                        let idx = Int(try r.u8())
-                        let c = palette[idx & 127]
-                        var run = 1
-                        if idx & 128 != 0 {
-                            while true { let b = Int(try r.u8()); run += b; if b != 255 { break } }
-                        }
-                        let end = min(n, i + run)
-                        (tile + i).update(repeating: c, count: end - i)
-                        i = end
-                    }
-                } else {
-                    throw SocketError.io("Bad ZRLE subencoding \(sub)")
                 }
-                fb.put(x: tx, y: ty, w: tw, h: th, from: tile)
                 tx += 64
             }
             ty += 64
+            if let onProgress, CFAbsoluteTimeGetCurrent() - lastNotify > 0.1 {
+                let bottom = min(ty, y + h)
+                onProgress(CGRect(x: x, y: notifiedY, width: w, height: bottom - notifiedY))
+                notifiedY = bottom
+                lastNotify = CFAbsoluteTimeGetCurrent()
+            }
         }
+        // Use up the rest so the persistent zlib stream stays in step with the server.
+        parsePos = outLen
+        while try pull() { parsePos = outLen }
+    }
+
+    private func zrleTile(_ r: inout ByteReader, tx: Int, ty: Int, tw: Int, th: Int, palette: inout [UInt32]) throws {
+        let sub = Int(try r.u8())
+        let n = tw * th
+        let tile = scratchPixels(n)
+
+        if sub == 0 {
+            for i in 0..<n { tile[i] = try r.cpixel() }
+        } else if sub == 1 {
+            let c = try r.cpixel()
+            fb.fill(x: tx, y: ty, w: tw, h: th, color: c)
+            return
+        } else if sub >= 2 && sub <= 16 {
+            for i in 0..<sub { palette[i] = try r.cpixel() }
+            let bits = sub == 2 ? 1 : (sub <= 4 ? 2 : 4)
+            let mask = (1 << bits) - 1
+            for row in 0..<th {
+                var byte = 0, nbits = 0
+                for col in 0..<tw {
+                    if nbits == 0 { byte = Int(try r.u8()); nbits = 8 }
+                    nbits -= bits
+                    tile[row * tw + col] = palette[(byte >> nbits) & mask]
+                }
+            }
+        } else if sub == 128 {
+            var i = 0
+            while i < n {
+                let c = try r.cpixel()
+                var run = 1
+                while true { let b = Int(try r.u8()); run += b; if b != 255 { break } }
+                let end = min(n, i + run)
+                (tile + i).update(repeating: c, count: end - i)
+                i = end
+            }
+        } else if sub >= 130 {
+            let psize = sub - 128
+            for i in 0..<psize { palette[i] = try r.cpixel() }
+            var i = 0
+            while i < n {
+                let idx = Int(try r.u8())
+                let c = palette[idx & 127]
+                var run = 1
+                if idx & 128 != 0 {
+                    while true { let b = Int(try r.u8()); run += b; if b != 255 { break } }
+                }
+                let end = min(n, i + run)
+                (tile + i).update(repeating: c, count: end - i)
+                i = end
+            }
+        } else {
+            throw SocketError.io("Bad ZRLE subencoding \(sub)")
+        }
+        fb.put(x: tx, y: ty, w: tw, h: th, from: tile)
     }
 
     // MARK: Tight
@@ -377,6 +436,9 @@ final class RectDecoder {
 }
 
 /// Bounds-checked reader over decompressed data.
+/// Thrown by ByteReader when a ZRLE tile's bytes haven't all arrived yet.
+struct NeedMoreData: Error {}
+
 struct ByteReader {
     let base: UnsafePointer<UInt8>
     let count: Int
@@ -389,14 +451,14 @@ struct ByteReader {
 
     @inline(__always)
     mutating func u8() throws -> UInt8 {
-        guard pos < count else { throw SocketError.io("Truncated compressed data") }
+        guard pos < count else { throw NeedMoreData() }
         let v = base[pos]; pos += 1; return v
     }
 
     /// ZRLE compressed pixel: 3 bytes (B, G, R) for our 32bpp/depth 24 format.
     @inline(__always)
     mutating func cpixel() throws -> UInt32 {
-        guard pos + 3 <= count else { throw SocketError.io("Truncated compressed data") }
+        guard pos + 3 <= count else { throw NeedMoreData() }
         let v = UInt32(base[pos]) | UInt32(base[pos + 1]) << 8 | UInt32(base[pos + 2]) << 16
         pos += 3
         return v

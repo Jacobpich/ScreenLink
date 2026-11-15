@@ -208,6 +208,9 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
         let c = RFBConnection(config: cfg)
         c.delegate = self
         connection = c
+        lastStatBytes = 0
+        lastStatFrames = 0
+        model.loadingStatus = nil
         c.start()
     }
 
@@ -363,6 +366,13 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
         lastStatBytes = bytes
         let rate = kbps > 1024 ? String(format: "%.1f MB/s", kbps / 1024) : String(format: "%.0f KB/s", kbps)
         model.stats = "\(Int(fbSize.width))×\(Int(fbSize.height)) · \(fps) fps · \(rate) · \(Int(c.lastRoundTrip * 1000)) ms"
+        if c.hasFullPicture {
+            model.loadingStatus = nil
+        } else {
+            let mb = Double(c.bytesSinceConnect) / 1_048_576
+            model.loadingStatus = String(format: "Loading screen… %.1f MB · %@", mb, rate)
+            ConnLog.write("waiting for picture: \(c.bytesSinceConnect / 1024) KB so far, \(Int(kbps)) KB/s")
+        }
     }
 
     // MARK: Viewport math

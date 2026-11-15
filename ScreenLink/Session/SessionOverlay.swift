@@ -29,6 +29,7 @@ final class SessionModel: ObservableObject {
     @Published var selectedDisplay: Int?
     @Published var displayLayoutIsManual = false
     @Published var signInUser = ""
+    @Published var loadingStatus: String?
 
     weak var controller: RemoteViewController?
     let hostName: String
@@ -240,12 +241,28 @@ struct SessionOverlay: View {
                 .padding(10)
             }
 
+            if model.state == .connected, let loading = model.loadingStatus {
+                VStack {
+                    HStack(spacing: 8) {
+                        ProgressView().tint(.white)
+                        Text(loading).font(.subheadline.weight(.semibold).monospacedDigit())
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.top, 70)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+
             statusCard
 
             if model.showHint { hintCard }
         }
         .animation(.easeInOut(duration: 0.2), value: model.state)
         .animation(.easeInOut(duration: 0.2), value: model.toast)
+        .animation(.easeInOut(duration: 0.2), value: model.loadingStatus == nil)
     }
 
     // MARK: Status

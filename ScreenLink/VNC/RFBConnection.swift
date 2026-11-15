@@ -191,6 +191,12 @@ final class RFBConnection {
         let fb = Framebuffer(width: w, height: h)
         framebuffer = fb
         decoder = RectDecoder(socket: socket, framebuffer: fb)
+        decoder.onProgress = { [weak self] rect in
+            guard let self, let fb = self.framebuffer else { return }
+            self.delegate?.rfb(self, didUpdate: fb, dirty: [rect])
+        }
+        connectedAt = CFAbsoluteTimeGetCurrent()
+        bytesAtConnect = socket.bytesReceived
 
         try sendPixelFormat()
         try sendEncodings()
@@ -262,6 +268,12 @@ final class RFBConnection {
     // asking for changes after that would leave the screen black until something moved.
     private var fullFramePending = true
     private var fullFrameArea = 0
+    /// False until the first complete picture of the desktop has arrived (read from the UI).
+    private(set) var hasFullPicture = false
+    private var connectedAt = CFAbsoluteTimeGetCurrent()
+    private var bytesAtConnect = 0
+    /// Bytes received since the session started (for the loading indicator).
+    var bytesSinceConnect: Int { socket.bytesReceived - bytesAtConnect }
 
     private func readFramebufferUpdate() throws {
         _ = try socket.readU8()
@@ -279,6 +291,9 @@ final class RFBConnection {
             let h = Int(try socket.readU16())
             let enc = try socket.readS32()
             if logThis { encs[enc, default: 0] += 1 }
+            if !hasFullPicture && dirty.count < 6 {
+                ConnLog.write("rect enc \(enc) \(w)x\(h) at \(x),\(y) (\(bytesSinceConnect / 1024) KB in, \(String(format: "%.1f", CFAbsoluteTimeGetCurrent() - connectedAt))s)")
+            }
 
             switch enc {
             case Encoding.raw: try decoder.raw(x: x, y: y, w: w, h: h)
@@ -354,7 +369,12 @@ final class RFBConnection {
         // waiting on a slow phone (which would freeze Screen Sharing for every viewer).
         if fullFramePending, let fb = framebuffer, fullFrameArea >= fb.width * fb.height {
             fullFramePending = false
-            ConnLog.write("full picture received after \(framesReceived) updates")
+            if !hasFullPicture {
+                hasFullPicture = true
+                ConnLog.write("full picture received after \(framesReceived) updates, \(bytesSinceConnect / 1024) KB in \(String(format: "%.1f", CFAbsoluteTimeGetCurrent() - connectedAt))s")
+            } else {
+                ConnLog.write("full picture received after \(framesReceived) updates")
+            }
         }
         requestUpdate(incremental: !fullFramePending)
         if let fb = framebuffer {

@@ -59,6 +59,33 @@ final class ZStream {
         if produced < expected { throw SocketError.io("Decompression produced too little data") }
     }
 
+    /// Streaming use (ZRLE): hand zlib a chunk of input, then call `inflateSome` until
+    /// `pendingInput` is 0. zlib keeps its own pointer into the chunk, so the caller must leave
+    /// that memory alone until the chunk is used up.
+    var pendingInput: Int { initialized ? Int(stream.avail_in) : 0 }
+
+    func feed(_ input: UnsafePointer<UInt8>, count: Int) throws {
+        try ensureInit()
+        stream.next_in = UnsafeMutablePointer(mutating: input)
+        stream.avail_in = uInt(count)
+    }
+
+    /// Inflates pending input into `buf[len..<cap]`. Returns the new length.
+    func inflateSome(into buf: UnsafeMutablePointer<UInt8>, cap: Int, len: Int) throws -> Int {
+        try ensureInit()
+        stream.next_out = buf + len
+        stream.avail_out = uInt(cap - len)
+        let inBefore = stream.avail_in, outBefore = stream.avail_out
+        let r = zlib.inflate(&stream, Z_SYNC_FLUSH)
+        guard r == Z_OK || r == Z_STREAM_END || r == Z_BUF_ERROR else {
+            throw SocketError.io("Decompression failed (\(r))")
+        }
+        if stream.avail_in == inBefore && stream.avail_out == outBefore {
+            throw SocketError.io("Decompression stalled")
+        }
+        return len + Int(outBefore - stream.avail_out)
+    }
+
     /// Inflate all of `input` (unknown output size). Returns produced byte count.
     func inflateAll(_ input: UnsafePointer<UInt8>, count: Int) throws -> Int {
         try ensureInit()
