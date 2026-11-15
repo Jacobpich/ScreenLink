@@ -4,8 +4,13 @@ import Foundation
 /// Lets us see from a Mac (via Xcode/devicectl) why a connection failed on the phone.
 enum ConnLog {
     private static let queue = DispatchQueue(label: "ConnLog")
+    #if os(macOS)
+    private static let url: URL? = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("Logs/ScreenLink.log")
+    #else
     private static let url: URL? = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
         .appendingPathComponent("connection.log")
+    #endif
     private static let stamp: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"; return f
     }()

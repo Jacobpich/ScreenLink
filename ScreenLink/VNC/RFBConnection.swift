@@ -577,7 +577,9 @@ final class RFBConnection {
     }
 
     func sendClipboard(_ text: String) {
-        let data = Array((text.data(using: .isoLatin1, allowLossyConversion: true) ?? Data()))
+        // macOS Screen Sharing expects Latin-1; ScreenLink Receiver also takes UTF-8 (emoji, accents).
+        let data = serverIsApple ? Array(text.data(using: .isoLatin1, allowLossyConversion: true) ?? Data())
+                                 : Array(text.utf8)
         var m: [UInt8] = [6, 0, 0, 0]
         m.appendU32(UInt32(data.count))
         m += data

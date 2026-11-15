@@ -1,4 +1,8 @@
+#if canImport(UIKit)
 import UIKit
+#else
+import Foundation
+#endif
 
 enum Keysym {
     static let backspace: UInt32 = 0xFF08
@@ -57,6 +61,7 @@ enum Keysym {
         }
     }
 
+    #if canImport(UIKit)
     /// Hardware keyboard (UIKey) → keysym.
     static func forKey(_ key: UIKey) -> UInt32? {
         switch key.keyCode {
@@ -103,4 +108,5 @@ enum Keysym {
         }
         return forCharacter(Character(ch.lowercased()))?.0
     }
+    #endif
 }

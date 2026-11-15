@@ -1,5 +1,7 @@
 import MetalKit
+#if canImport(UIKit)
 import UIKit
+#endif
 
 private struct QuadUniforms {
     var rect: SIMD4<Float>
@@ -248,8 +250,8 @@ fragment float4 quad_fragment(VOut in [[stage_in]],
             path.addLine(to: CGPoint(x: 20, y: 20.5))
             path.closeSubpath()
             ctx.addPath(path)
-            ctx.setFillColor(UIColor.black.cgColor)
-            ctx.setStrokeColor(UIColor.white.cgColor)
+            ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+            ctx.setStrokeColor(CGColor(gray: 1, alpha: 1))
             ctx.setLineWidth(2)
             ctx.setLineJoin(.round)
             ctx.drawPath(using: .fillStroke)

@@ -31,8 +31,39 @@ That's it. The receiver starts with Windows, even before anyone signs in; its ic
 
 More detail: [Receiver/README.md](Receiver/README.md).
 
+## Mac: control your PC from your laptop
+
+**ScreenLink for Mac** controls your Windows PC (or another Mac) from a MacBook, with the
+same ScreenLink Receiver on the PC.
+
+**Install:** open **Terminal** on the laptop, paste this line and press Return:
+
+```bash
+curl -L https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLink-Mac.zip -o /tmp/ScreenLink-Mac.zip && ditto -x -k /tmp/ScreenLink-Mac.zip /Applications && open /Applications/ScreenLink.app
+```
+
+It installs ScreenLink into Applications and opens it. Installing this way skips the "can't
+be opened" warning macOS shows for apps downloaded in a browser. If you'd rather download
+[ScreenLink-Mac.zip](https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLink-Mac.zip)
+in a browser, unzip it, move ScreenLink to Applications, open it once, then go to
+**System Settings → Privacy & Security** and click **Open Anyway**.
+
+**Use it:**
+1. Your PC shows up under **On Your Tailscale** (when Tailscale is on, on the laptop). Click **Add…**,
+   type the receiver password, and optionally the PC's home Wi-Fi address (192.168.x.x). Or click **+**
+   to type the addresses yourself.
+2. Double-click the PC to connect. It opens in its own window; the green button makes it full screen.
+
+While the PC's window is in front, your keyboard goes to the PC: ⌘C/⌘V/⌘Z work as Ctrl+C/V/Z,
+⌘Q closes the PC's window (Alt+F4), ⌘←/→ jump to the start/end of a line. Copy on one computer and
+paste on the other; the clipboard is shared. Shortcuts the Mac keeps for itself (⌘Tab, ⌘Space,
+Mission Control) are in the **Computer** menu: Start, Task View, Alt+Tab, Task Manager and more.
+With more than one monitor on the PC, the **Displays** menu shows one at a time.
+
 ## Building
-Open `ScreenLink.xcodeproj` in Xcode (iOS 17+). Under **Signing & Capabilities**, pick your own team and change the bundle identifier to something unique, then run on your iPhone. No third-party dependencies.
+Mac app: `Mac/build.sh` builds `ScreenLink.app` and `Downloads/ScreenLink-Mac.zip` (SwiftPM, `Package.swift`; it shares `ScreenLink/VNC` with the iPhone app).
+
+iPhone app: open `ScreenLink.xcodeproj` in Xcode (iOS 17+). Under **Signing & Capabilities**, pick your own team and change the bundle identifier to something unique, then run on your iPhone. No third-party dependencies.
 
 `Tools/mock/` has small Python VNC servers for testing without a Mac (`python3 Tools/mock/live.py`, then connect to `127.0.0.1:5999` from the simulator).
 
