@@ -476,6 +476,9 @@ final class RFBConnection {
     private var scrollCap: Int { serverIsApple ? Self.maxScrollBacklog : 96 }
     private var notchesPerTick: Int { serverIsApple ? 1 : 6 }
     private static let inputInterval: TimeInterval = 0.004 // pointer/scroll paced to ≤ 250 updates/s
+    private static let appleMoveInterval: TimeInterval = 1.0 / 60
+    private static let minPingInterval: TimeInterval = 0.1
+    private static let appleScrollInterval: TimeInterval = 1.0 / 120
 
     private func startWriter() {
         out.lock(); writerRunning = true; out.unlock()
@@ -524,16 +527,26 @@ final class RFBConnection {
     }
 
     private func writerLoop() {
-        var lastInput: CFAbsoluteTime = 0
+        var lastMove: CFAbsoluteTime = 0, lastScroll: CFAbsoluteTime = 0
         out.lock()
         while true {
             if stopped { out.unlock(); return }
             let now = CFAbsoluteTimeGetCurrent()
-            let hasInput = pendingMove != nil || pendingScroll.dx != 0 || pendingScroll.dy != 0
-            let inputDue = hasInput && now - lastInput >= Self.inputInterval
-            if outQueue.isEmpty && !inputDue {
-                if hasInput {
-                    _ = out.wait(until: Date(timeIntervalSinceNow: max(0.0005, lastInput + Self.inputInterval - now)))
+            // Pointer motion to a Mac goes out at display rate (only the latest position matters).
+            // It is NOT paced by pings: a 1-pixel "forced" request answered right away makes macOS
+            // reply with just that pixel, and a steady stream of them starved the real picture
+            // (measured: 20-70 updates/s, nearly all empty, while dragging).
+            let moveInterval = serverIsApple ? Self.appleMoveInterval : Self.inputInterval
+            let hasMove = pendingMove != nil
+            let hasScroll = pendingScroll.dx != 0 || pendingScroll.dy != 0
+            let moveDue = hasMove && now - lastMove >= moveInterval
+            let scrollInterval = serverIsApple ? Self.appleScrollInterval : Self.inputInterval
+            let scrollDue = hasScroll && now - lastScroll >= scrollInterval
+            if outQueue.isEmpty && !moveDue && !scrollDue {
+                if hasMove || hasScroll {
+                    let next = min(hasMove ? lastMove + moveInterval : .infinity,
+                                   hasScroll ? lastScroll + scrollInterval : .infinity)
+                    _ = out.wait(until: Date(timeIntervalSinceNow: max(0.0005, next - now)))
                 } else {
                     out.wait()
                 }
@@ -544,19 +557,24 @@ final class RFBConnection {
             var batch = outQueue
             outQueue.removeAll(keepingCapacity: true)
 
-            // Pointer motion and scrolling are paced, and held back entirely while data is
-            // still piling up unsent — then only the latest position is sent. This keeps the
-            // Mac's input queue short, so frame requests never wait behind a backlog.
-            if inputDue {
-                lastInput = now
+            // Motion and scrolling are held back while data is still piling up unsent; then only
+            // the latest position is sent. This keeps the Mac's input queue short.
+            let backlogLow = (moveDue || scrollDue) && socket.sendBacklogIsLow()
+            if moveDue {
+                lastMove = now
+                if backlogLow, let m = pendingMove {
+                    batch += pointerMessage(m.x, m.y, buttonMask)
+                    pendingMove = nil
+                }
+            }
+            if scrollDue {
+                lastScroll = now
+                // Scrolling is what can flood a busy Mac (each notch is slow for it to handle), so it
+                // still waits for a ping when the Mac is behind; pings go out at most 10 times a second.
                 if pingOutstanding && now - pingSent > 1.0 { pingOutstanding = false }   // reply lost; carry on
                 let allowance = max(0.04, pingRTT * 2)
                 let macIsBehind = serverIsApple && pingOutstanding && now - pingSent > allowance
-                if !macIsBehind && socket.sendBacklogIsLow() {
-                    if let m = pendingMove {
-                        batch += pointerMessage(m.x, m.y, buttonMask)
-                        pendingMove = nil
-                    }
+                if backlogLow && !macIsBehind {
                     let (sx, sy) = scrollAt
                     for _ in 0..<notchesPerTick where pendingScroll.dy != 0 {
                         let bit: UInt8 = pendingScroll.dy > 0 ? 16 : 8
@@ -568,7 +586,7 @@ final class RFBConnection {
                         batch += pointerMessage(sx, sy, buttonMask | bit) + pointerMessage(sx, sy, buttonMask)
                         pendingScroll.dx -= pendingScroll.dx.signum()
                     }
-                    if serverIsApple, !pingOutstanding, let ping = pingMessageLocked() {
+                    if serverIsApple, !pingOutstanding, now - pingSent >= Self.minPingInterval, let ping = pingMessageLocked() {
                         batch += ping
                         pingOutstanding = true
                         pingSent = now
