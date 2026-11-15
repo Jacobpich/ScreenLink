@@ -72,6 +72,9 @@ final class RFBConnection {
     private var pingSent: CFAbsoluteTime = 0
     private var pingRTT: Double = 0.05
     private var pingPoint = (x: 0, y: 0)
+    /// A pixel that's on a real display (guarded by `out`). With displays of different sizes the
+    /// picture has filler macOS never sends, and a 1-pixel request there is never answered.
+    private var pingTarget: (x: Int, y: Int)?
 
     // Health watchdog
     private var lastProgressBytes = -1
@@ -289,6 +292,7 @@ final class RFBConnection {
     // asking for changes after that would leave the screen black until something moved.
     private var fullFramePending = true
     private var fullFrameArea = 0
+    private var statRects = 0, statPixels = 0
     /// macOS answers a full-screen request with one rectangle per display (the black filler
     /// between differently sized displays is never sent), so those rectangles are the layout.
     private var appleDisplayRects: [CGRect] = []
@@ -315,7 +319,27 @@ final class RFBConnection {
         delegate?.rfb(self, screens: sorted)
     }
 
+    // Rolling performance stats, logged every few seconds (connection.log / ScreenLink.log).
+    private var st = (start: CFAbsoluteTimeGetCurrent(), updates: 0, rects: 0, pixels: 0, bytes: 0, wait: 0.0, read: 0.0)
+
+    private func noteStats(t0: CFAbsoluteTime, bytes0: Int, rects: Int, pixels: Int) {
+        let now = CFAbsoluteTimeGetCurrent()
+        st.updates += 1; st.rects += rects; st.pixels += pixels
+        st.bytes += socket.bytesReceived - bytes0
+        st.wait += max(0, t0 - lastRequest); st.read += now - t0
+        let span = now - st.start
+        guard span >= 3 else { return }
+        let u = Double(max(1, st.updates))
+        ConnLog.write(String(format: "stats %.1fs: %d updates (%.1f/s), %.1f rects and %.2f Mpx each, %.0f KB each, %.1f MB/s, wait %.0f ms, read+decode %.0f ms",
+                             span, st.updates, Double(st.updates) / span, Double(st.rects) / u, Double(st.pixels) / u / 1e6,
+                             Double(st.bytes) / u / 1024, Double(st.bytes) / span / 1e6, st.wait / u * 1000, st.read / u * 1000))
+        st = (now, 0, 0, 0, 0, 0, 0)
+    }
+
     private func readFramebufferUpdate() throws {
+        let t0 = CFAbsoluteTimeGetCurrent(), bytes0 = socket.bytesReceived
+        defer { noteStats(t0: t0, bytes0: bytes0, rects: statRects, pixels: statPixels) }
+        statRects = 0; statPixels = 0
         _ = try socket.readU8()
         let n = Int(try socket.readU16())
         // ScreenLink Receiver: ask for the next frame now, so it's prepared while this one
@@ -390,10 +414,16 @@ final class RFBConnection {
             }
             if enc == Encoding.lastRect { break }
             dirty.append(CGRect(x: x, y: y, width: w, height: h))
+            statRects += 1; statPixels += w * h
             if fullFramePending {
                 fullFrameArea += w * h
                 let r = CGRect(x: x, y: y, width: w, height: h)
-                if serverIsApple && w >= 320 && h >= 240 && !appleDisplayRects.contains(r) { appleDisplayRects.append(r) }
+                if serverIsApple && w >= 320 && h >= 240 && !appleDisplayRects.contains(r) {
+                    appleDisplayRects.append(r)
+                    if appleDisplayRects.count == 1 {   // the first display macOS sends: aim the pings there
+                        out.lock(); pingTarget = (x + w - 1, y + h - 1); out.unlock()
+                    }
+                }
             }
             if pingPoint.x >= x && pingPoint.x < x + w && pingPoint.y >= y && pingPoint.y < y + h { coversPing = true }
         }
@@ -474,7 +504,7 @@ final class RFBConnection {
     /// Non-incremental request for one pixel in the bottom-right corner. Caller holds `out`.
     private func pingMessageLocked() -> [UInt8]? {
         guard let fb = framebuffer else { return nil }
-        pingPoint = (fb.width - 1, fb.height - 1)
+        if let t = pingTarget, t.x < fb.width, t.y < fb.height { pingPoint = t } else { pingPoint = (fb.width - 1, fb.height - 1) }
         var m: [UInt8] = [3, 0]
         m.appendU16(UInt16(pingPoint.x)); m.appendU16(UInt16(pingPoint.y))
         m.appendU16(1); m.appendU16(1)
@@ -642,7 +672,9 @@ final class RFBConnection {
         if probeTime == nil {
             if now - lastProgressTime > 4 {
                 probeTime = now
-                var m: [UInt8] = [3, 0, 0, 0, 0, 0]   // non-incremental, 1×1 at the origin
+                out.lock(); let p = pingTarget ?? (0, 0); out.unlock()
+                var m: [UInt8] = [3, 0]   // non-incremental, 1×1 on a display
+                m.appendU16(UInt16(p.x)); m.appendU16(UInt16(p.y))
                 m.appendU16(1); m.appendU16(1)
                 enqueue(m)
             }

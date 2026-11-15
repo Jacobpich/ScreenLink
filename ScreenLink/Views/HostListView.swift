@@ -83,6 +83,14 @@ struct HostListView: View {
             .onAppear {
                 store.probeAll()
                 #if DEBUG
+                // Dev hook: SCREENLINK_CONNECT_SAVED=<part of a saved computer's name> opens it with its
+                // saved Keychain password (used to measure real sessions).
+                if let want = ProcessInfo.processInfo.environment["SCREENLINK_CONNECT_SAVED"],
+                   let h = store.hosts.first(where: { $0.name.localizedCaseInsensitiveContains(want) }) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        SessionPresenter.present(h, password: store.password(for: h) ?? "")
+                    }
+                }
                 // Dev hook: SCREENLINK_AUTOCONNECT=host:port (+ SCREENLINK_PASSWORD) opens a session directly.
                 if let target = ProcessInfo.processInfo.environment["SCREENLINK_AUTOCONNECT"] {
                     let parts = target.split(separator: ":")

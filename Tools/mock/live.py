@@ -84,6 +84,7 @@ def serve(s):
     pending=[True]
     first=[True]
     turn=[0]
+    moves=[0,__import__("time").time()]
     while True:
         t=rd(1)[0]
         if t==0: rd(19)
@@ -92,8 +93,11 @@ def serve(s):
             m=rd(9)
             inc=m[0]; rx,ry,rw,rh=struct.unpack(">HHHH",m[1:])
             if not first[0] and not inc and rw==1 and rh==1:
-                # Answer flow-control pings immediately, like the real server.
-                s.sendall(struct.pack(">BBH",0,0,1)+send_rect(rx,ry,1,1))
+                # Answer flow-control pings immediately, like the real server; the real Mac
+                # never answers for filler that isn't on any display.
+                on_display = not REALMAC or any(dx<=rx<dx+dw and dy<=ry<dy+dh for dx,dy,dw,dh in [(0,0,2560,1440),(2560,180,1920,1080)])
+                if on_display: s.sendall(struct.pack(">BBH",0,0,1)+send_rect(rx,ry,1,1))
+                else: print("ping in filler ignored",rx,ry,flush=True)
             if first[0]:
                 first[0]=False
                 if MACLIKE:
@@ -112,6 +116,9 @@ def serve(s):
         elif t==4: m=rd(7); print("key",m[0],hex(struct.unpack(">I",m[3:])[0]),flush=True)
         elif t==5:
             m=rd(5); btn=m[0]; x,y=struct.unpack(">HH",m[1:])
+            moves[0]+=1
+            import time as _t
+            if _t.time()-moves[1]>=2: print("moves/s",round(moves[0]/(_t.time()-moves[1]),1),flush=True); moves[0]=0; moves[1]=_t.time()
             want="ibeam" if TF[0]<=x<TF[0]+TF[2] and TF[1]<=y<TF[1]+TF[3] else "arrow"
             if want!=shape[0]:
                 shape[0]=want; print("cursor",want,flush=True)
