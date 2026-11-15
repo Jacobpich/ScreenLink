@@ -5,15 +5,20 @@ Screen Sharing on a Mac. It's a small RFB (VNC) server written in Go with no dep
 
 ## Install on the PC
 
-1. Install **Tailscale** on the PC and sign in with the same account as the iPhone.
-2. Run `ScreenLinkReceiver.exe` (`ScreenLinkReceiver-arm64.exe` on ARM PCs). Windows
-   SmartScreen may warn because the app isn't signed: **More info → Run anyway**.
-3. Choose a password in the setup window, then click **Yes** when Windows asks for permission.
-   That sets it to start at sign-in with admin rights (so it can control admin apps) and adds a
-   firewall rule that only lets Tailscale devices (100.64.0.0/10) in.
-4. In ScreenLink: add the PC by its Tailscale name or 100.x address, any username, and that password.
+Download: [ScreenLinkReceiver.exe](https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLinkReceiver.exe)
+([ARM64](https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLinkReceiver-arm64.exe)). Step-by-step
+instructions are in the [main README](../README.md#windows-pc-download).
 
-The tray icon (by the clock) shows the address and has Change Password, Open Log and Quit.
+1. Run `ScreenLinkReceiver.exe`. Windows SmartScreen may warn because the app isn't signed: **More info → Run anyway**.
+2. Choose a password in the setup window, and answer whether iPhones on this Wi-Fi may connect
+   without Tailscale.
+3. Click **Yes** when Windows asks for permission. That sets it to start at sign-in with admin
+   rights (so it can control admin apps) and adds a firewall rule that only lets Tailscale devices
+   (100.64.0.0/10) in, plus this network (`LocalSubnet`) if you said yes.
+4. In ScreenLink: add the PC by the address the setup window shows, any username, and that password.
+
+The tray icon (by the clock) shows the address and has **Allow Devices on This Wi-Fi** (flips the
+setting and the firewall rule, with a permission prompt), Change Password, Open Log and Quit.
 Opening a newer `.exe` on a PC that's already set up updates the installed copy.
 Settings and the log live in `%APPDATA%\ScreenLink Receiver\`.
 
@@ -21,8 +26,9 @@ Settings and the log live in `%APPDATA%\ScreenLink Receiver\`.
 
 - **Sign-in:** security type 30 (Diffie-Hellman + AES, the same as macOS), so ScreenLink's
   existing sign-in works. Only a salted PBKDF2 hash of the password is stored. Connections
-  from outside Tailscale are refused, and repeated wrong passwords are slowed down and then
-  locked out.
+  from outside Tailscale are refused unless "Allow Devices on This Wi-Fi" is on (then private
+  network addresses are let in too, never the internet). Repeated wrong passwords are slowed
+  down and then locked out.
 - **Picture:** GDI capture of the whole desktop (all monitors, physical pixels), 64×64 tile
   diffing, ZRLE compression. It only sends after ScreenLink asks, like macOS. Monitor layout
   goes out as ExtendedDesktopSize, so ScreenLink's Displays button works.

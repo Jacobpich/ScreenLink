@@ -32,6 +32,8 @@ func main() {
 	switch {
 	case strings.Contains(args, "--install"):
 		os.Exit(installElevated())
+	case strings.Contains(args, "--firewall"):
+		os.Exit(firewallElevated())
 	case strings.Contains(args, "--setup"):
 		runSetup(true)
 		return
@@ -86,6 +88,7 @@ func runReceiver(cfg *Config, background bool) {
 		}
 		return
 	}
+	appCfg = cfg
 	l, err := listen(cfg)
 	if err != nil {
 		log.Print(err)
@@ -123,12 +126,21 @@ func keepAwake(on <-chan bool) {
 }
 
 func addressHelp() string {
-	ip := tailscaleIP()
+	cfg := loadConfig()
+	ts, lan := tailscaleIP(), lanIP()
 	host, _ := os.Hostname()
-	if ip == "" {
-		return "Tailscale isn't running on this PC. Install it from tailscale.com/download/windows and sign in with the same account as your iPhone."
+	var addr string
+	switch {
+	case ts != "" && cfg.AllowLAN && lan != "":
+		addr = fmt.Sprintf("  Address: %s  (anywhere, with Tailscale)\n       or: %s  (on this Wi-Fi, no Tailscale needed)", ts, lan)
+	case ts != "":
+		addr = fmt.Sprintf("  Address: %s  (or %s)", ts, strings.ToLower(host))
+	case cfg.AllowLAN && lan != "":
+		addr = fmt.Sprintf("  Address: %s  (your iPhone must be on the same Wi-Fi)", lan)
+	default:
+		return "Tailscale isn't running on this PC. Either install it from tailscale.com/download/windows and sign in with the same account as your iPhone, or turn on \"Allow devices on this Wi-Fi\" in the ScreenLink tray menu (by the clock)."
 	}
-	return fmt.Sprintf("In ScreenLink on your iPhone, add this PC:\n  Address: %s  (or %s)\n  Username: %s\n  Password: the one you chose during setup", ip, strings.ToLower(host), windowsUser())
+	return fmt.Sprintf("In ScreenLink on your iPhone, add this PC:\n%s\n  Username: %s\n  Password: the one you chose during setup", addr, windowsUser())
 }
 
 func windowsUser() string {
@@ -183,7 +195,7 @@ func runSetup(changeOnly bool) {
 	}
 	cfg := loadConfig()
 	p("ScreenLink Receiver\n===================\n\n")
-	p("This lets ScreenLink on your iPhone see and control this PC over Tailscale.\n\n")
+	p("This lets ScreenLink on your iPhone see and control this PC.\n\n")
 
 	for {
 		p("Choose a password for ScreenLink to use (at least 8 characters): ")
@@ -199,6 +211,12 @@ func runSetup(changeOnly bool) {
 		}
 		cfg.setPassword(a)
 		break
+	}
+	if !changeOnly {
+		p("\nAllow iPhones on this Wi-Fi to connect without Tailscale? (Tailscale also encrypts the\n")
+		p("picture, so only say yes for your home network.) Type y or n, then Enter: ")
+		ans, _ := in.ReadString('\n')
+		cfg.AllowLAN = strings.HasPrefix(strings.ToLower(strings.TrimSpace(ans)), "y")
 	}
 	if err := cfg.save(); err != nil {
 		p("\nCouldn't save settings: %v\n", err)
@@ -226,7 +244,11 @@ func runSetup(changeOnly bool) {
 	p("\nNext, Windows will ask for permission. Click Yes so ScreenLink can:\n")
 	p("  - start automatically when you sign in\n")
 	p("  - control apps that run as administrator\n")
-	p("  - accept connections through the firewall (Tailscale devices only)\n\n")
+	if cfg.AllowLAN {
+		p("  - accept connections through the firewall (Tailscale and this network only)\n\n")
+	} else {
+		p("  - accept connections through the firewall (Tailscale devices only)\n\n")
+	}
 	code, err := runElevated(target, "--install")
 	switch {
 	case err == nil && code == 0:
@@ -307,15 +329,60 @@ func installElevated() int {
 	// The task's default 3-day time limit would stop the receiver; remove it.
 	exec.Command("powershell", "-NoProfile", "-Command",
 		fmt.Sprintf(`$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Set-ScheduledTask -TaskName '%s' -Settings $s`, taskName)).Run()
-	exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+taskName).Run()
-	out, err = exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name="+taskName, "dir=in", "action=allow",
-		"program="+exe, "enable=yes", "profile=any", "protocol=TCP", fmt.Sprintf("localport=%d", cfg.Port),
-		"remoteip=100.64.0.0/10").CombinedOutput()
-	if err != nil {
-		log.Printf("firewall rule failed: %v %s", err, out)
-	}
+	addFirewallRule(exe, cfg)
 	removeRunKey()
 	return 0
+}
+
+// firewallElevated runs as administrator after the tray's Wi-Fi switch changes the setting.
+func firewallElevated() int {
+	setupLog()
+	exe, _ := os.Executable()
+	if addFirewallRule(exe, loadConfig()) != nil {
+		return 2
+	}
+	return 0
+}
+
+func addFirewallRule(exe string, cfg *Config) error {
+	exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+taskName).Run()
+	out, err := exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name="+taskName, "dir=in", "action=allow",
+		"program="+exe, "enable=yes", "profile=any", "protocol=TCP", fmt.Sprintf("localport=%d", cfg.Port),
+		"remoteip="+cfg.firewallRemote()).CombinedOutput()
+	if err != nil {
+		log.Printf("firewall rule failed: %v %s", err, out)
+	} else {
+		log.Printf("firewall rule set: remoteip=%s", cfg.firewallRemote())
+	}
+	return err
+}
+
+// toggleLAN flips "Allow devices on this Wi-Fi" and updates the firewall rule (with a UAC prompt).
+func toggleLAN() {
+	cfg := appCfg
+	cfg.mu.Lock()
+	cfg.AllowLAN = !cfg.AllowLAN
+	on := cfg.AllowLAN
+	cfg.mu.Unlock()
+	if err := cfg.save(); err != nil {
+		messageBox("Couldn't save the setting:\n\n"+err.Error(), appName, 0x10)
+		return
+	}
+	exe, _ := os.Executable()
+	if code, err := runElevated(exe, "--firewall"); err != nil || code != 0 {
+		cfg.mu.Lock()
+		cfg.AllowLAN = !on
+		cfg.mu.Unlock()
+		cfg.save()
+		messageBox("Windows didn't give permission to change the firewall, so nothing changed.", appName, 0x30)
+		return
+	}
+	setTrayTip(trayViewers)
+	if on {
+		messageBox("iPhones on this Wi-Fi can now connect without Tailscale.\n\n"+addressHelp(), appName, 0x40)
+	} else {
+		messageBox("Only Tailscale devices can connect now.", appName, 0x40)
+	}
 }
 
 func setRunKey(exe string) {
@@ -331,6 +398,7 @@ func removeRunKey() {
 // Tray icon
 
 var (
+	appCfg      *Config
 	trayHwnd    uintptr
 	trayData    notifyIconData
 	taskbarMsg  uintptr
@@ -355,10 +423,22 @@ const (
 	menuPassword = 10
 	menuLog      = 11
 	menuQuit     = 12
+	menuLAN      = 13
 )
 
+// connectAddress is the address to show in the tray: Tailscale first, else this network's.
+func connectAddress() string {
+	if ip := tailscaleIP(); ip != "" {
+		return ip
+	}
+	if appCfg != nil && appCfg.AllowLAN {
+		return lanIP()
+	}
+	return ""
+}
+
 func trayTip() string {
-	ip := tailscaleIP()
+	ip := connectAddress()
 	if ip == "" {
 		ip = "Tailscale not running"
 	}
@@ -436,8 +516,8 @@ func showMenu() {
 	add := func(flags, id uintptr, text string) {
 		pAppendMenuW.Call(menu, flags, id, uintptr(unsafe.Pointer(u16(text))))
 	}
-	const mfGrayed, mfSeparator = 0x1, 0x800
-	ip := tailscaleIP()
+	const mfGrayed, mfChecked, mfSeparator = 0x1, 0x8, 0x800
+	ip := connectAddress()
 	if ip == "" {
 		add(mfGrayed, 0, "Tailscale isn't running on this PC")
 	} else {
@@ -447,6 +527,11 @@ func showMenu() {
 		add(mfGrayed, 0, fmt.Sprintf("%d iPhone connected", trayViewers))
 	}
 	add(mfSeparator, 0, "")
+	lanFlag := uintptr(0)
+	if appCfg != nil && appCfg.AllowLAN {
+		lanFlag = mfChecked
+	}
+	add(lanFlag, menuLAN, "Allow Devices on This Wi-Fi (No Tailscale)")
 	add(0, menuPassword, "Change Password…")
 	add(0, menuLog, "Open Log")
 	add(0, menuQuit, "Quit ScreenLink Receiver")
@@ -459,6 +544,8 @@ func showMenu() {
 	switch cmd {
 	case menuPassword:
 		exec.Command(exe, "--setup").Start()
+	case menuLAN:
+		go toggleLAN()
 	case menuLog:
 		exec.Command("notepad", filepath.Join(configDir(), "receiver.log")).Start()
 	case menuQuit:

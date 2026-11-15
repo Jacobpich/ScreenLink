@@ -34,7 +34,7 @@ func (c *Config) reload() {
 	}
 	fresh := loadConfig()
 	c.mu.Lock()
-	c.Salt, c.Hash = fresh.Salt, fresh.Hash
+	c.Salt, c.Hash, c.AllowLAN = fresh.Salt, fresh.Hash, fresh.AllowLAN
 	c.mu.Unlock()
 }
 
@@ -118,7 +118,10 @@ func (c *Config) allowed(ip net.IP) bool {
 			return true
 		}
 	}
-	if c.AllowLAN {
+	c.mu.Lock()
+	lan := c.AllowLAN
+	c.mu.Unlock()
+	if lan {
 		for _, n := range lans {
 			if n.Contains(ip) {
 				return true
@@ -126,6 +129,33 @@ func (c *Config) allowed(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// lanIP returns this machine's home-network IPv4 address (192.168.x.x first, then 10.x, then 172.16-31.x).
+func lanIP() string {
+	ifs, _ := net.Interfaces()
+	for _, r := range []*net.IPNet{lans[2], lans[0], lans[1]} {
+		for _, i := range ifs {
+			if i.Flags&net.FlagUp == 0 || i.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			addrs, _ := i.Addrs()
+			for _, a := range addrs {
+				if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && r.Contains(n.IP) {
+					return n.IP.String()
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// firewallRemote is the firewall rule's allowed-sender list: Tailscale, plus this network if turned on.
+func (c *Config) firewallRemote() string {
+	if c.AllowLAN {
+		return "100.64.0.0/10,LocalSubnet"
+	}
+	return "100.64.0.0/10"
 }
 
 // tailscaleIP returns this machine's Tailscale IPv4 address, if Tailscale is running.

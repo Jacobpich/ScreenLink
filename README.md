@@ -2,6 +2,28 @@
 
 A fast iPhone/iPad client for macOS Screen Sharing, built to be used over Tailscale.
 
+## Windows PC: download
+
+ScreenLink can control a Windows PC too. The PC needs one small app, **ScreenLink Receiver**.
+
+**[⬇ Download ScreenLink Receiver for Windows](https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLinkReceiver.exe)**
+(Snapdragon / ARM PCs: [ARM64 version](https://github.com/Jacobpich/ScreenLink/raw/main/Downloads/ScreenLinkReceiver-arm64.exe))
+
+1. Open this page on the PC and click the download link above.
+   - If the browser says the file "isn't commonly downloaded", choose **Keep** (in Edge: **⋯ → Keep → Keep anyway**).
+2. Open **ScreenLinkReceiver.exe** from your Downloads folder.
+   - If a blue "Windows protected your PC" box appears, click **More info → Run anyway**. (The app isn't signed, so Windows doesn't recognize it yet.)
+3. A setup window opens. Type a password, press Enter, then type it again.
+4. It asks whether iPhones on this Wi-Fi may connect without Tailscale. Type **y** for an at-home setup with no Tailscale, or **n** if you use Tailscale. Press Enter.
+5. Windows asks for permission. Click **Yes**.
+6. The window shows the address to use. On the iPhone, open ScreenLink, tap **+**, and enter that address, any username, and your password.
+
+That's it. The receiver starts when you sign in to the PC; its icon is by the clock. Right-click the icon to see the address again, change the password, or turn **Allow Devices on This Wi-Fi** on or off.
+
+**Tailscale or Wi-Fi?** With [Tailscale](https://tailscale.com/download/windows) on the PC (signed in to the same account as the iPhone), ScreenLink works from anywhere and the whole connection is encrypted. Without it, the iPhone must be on the same Wi-Fi. The password is still protected, but the screen picture isn't encrypted, so only use that on your home network.
+
+More detail: [Receiver/README.md](Receiver/README.md).
+
 ## Building
 Open `ScreenLink.xcodeproj` in Xcode (iOS 17+). Under **Signing & Capabilities**, pick your own team and change the bundle identifier to something unique, then run on your iPhone. No third-party dependencies.
 
