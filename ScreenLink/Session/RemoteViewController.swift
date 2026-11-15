@@ -203,7 +203,7 @@ final class RemoteViewController: UIViewController, RFBConnectionDelegate, UIGes
         connection?.stop()
         closing = false
         model.state = everConnected ? .reconnecting(max(1, retryCount)) : .connecting
-        let cfg = ConnectionConfig(host: host.address.trimmingCharacters(in: .whitespaces), port: host.port,
+        let cfg = ConnectionConfig(host: host.address.trimmingCharacters(in: .whitespaces), homeHost: host.home, port: host.port,
                                    username: host.username, password: password, quality: host.quality)
         let c = RFBConnection(config: cfg)
         c.delegate = self

@@ -8,7 +8,8 @@ struct HostEditorView: View {
     @State private var password: String
     @State private var portText: String
     @State private var testing = false
-    @State private var testResult: Bool?
+    @State private var testResult: String?
+    @State private var testOK = false
     let isNew: Bool
 
     init(host: SavedHost, isNew: Bool) {
@@ -32,6 +33,17 @@ struct HostEditorView: View {
                     Text("Computer")
                 } footer: {
                     Text("Use the computer's Tailscale machine name (like **mac-studio**), its MagicDNS name, or its **100.x.y.z** address from the Tailscale app. For a Windows PC, install ScreenLink Receiver on it first.")
+                }
+
+                Section {
+                    TextField("Home Wi-Fi address (optional)", text: Binding(
+                        get: { host.homeAddress ?? "" },
+                        set: { host.homeAddress = $0; testResult = nil }))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                } footer: {
+                    Text("The computer's address on your home network, like **192.168.1.20** (ScreenLink Receiver shows it). At home, ScreenLink connects there, so Tailscale doesn't need to be on. Away from home, it uses the Tailscale address above.")
                 }
 
                 Section {
@@ -75,9 +87,9 @@ struct HostEditorView: View {
                             Spacer()
                             if testing { ProgressView() }
                             else if let r = testResult {
-                                Image(systemName: r ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                    .foregroundStyle(r ? .green : .red)
-                                Text(r ? "Reachable" : "Not reachable").foregroundStyle(.secondary)
+                                Image(systemName: testOK ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .foregroundStyle(testOK ? .green : .red)
+                                Text(r).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -108,6 +120,7 @@ struct HostEditorView: View {
     private func save() {
         host.port = Int(portText) ?? 5900
         host.address = host.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        host.homeAddress = host.home
         if host.name.trimmingCharacters(in: .whitespaces).isEmpty {
             host.name = host.address.split(separator: ".").first.map(String.init) ?? host.address
         }
@@ -119,12 +132,19 @@ struct HostEditorView: View {
         testing = true
         testResult = nil
         let addr = host.address.trimmingCharacters(in: .whitespaces)
+        let home = host.home
         let port = Int(portText) ?? 5900
         Task.detached {
             let ok = TCPSocket.probe(host: addr, port: port, timeout: 4)
+            let homeOK = home.map { TCPSocket.probe(host: $0, port: port, timeout: 2) } ?? false
             await MainActor.run {
                 testing = false
-                testResult = ok
+                testOK = ok || homeOK
+                if home == nil {
+                    testResult = ok ? "Reachable" : "Not reachable"
+                } else {
+                    testResult = "Home \(homeOK ? "✓" : "✗") · Tailscale \(ok ? "✓" : "✗")"
+                }
             }
         }
     }

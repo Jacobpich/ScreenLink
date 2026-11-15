@@ -15,7 +15,9 @@ instructions are in the [main README](../README.md#windows-pc-download).
 3. Click **Yes** when Windows asks for permission. That sets it to start at sign-in with admin
    rights (so it can control admin apps) and adds a firewall rule that only lets Tailscale devices
    (100.64.0.0/10) in, plus this network (`LocalSubnet`) if you said yes.
-4. In ScreenLink: add the PC by the address the setup window shows, any username, and that password.
+4. In ScreenLink: put the Tailscale address (100.x) in **Tailscale name or IP** and the home address
+   (192.168.x.x) in **Home Wi-Fi address**, plus any username and that password. ScreenLink uses the
+   home address when it answers and Tailscale otherwise.
 
 The tray icon (by the clock) shows the address and has **Allow Devices on This Wi-Fi** (flips the
 setting and the firewall rule, with a permission prompt), Change Password, Open Log and Quit.

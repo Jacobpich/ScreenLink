@@ -88,6 +88,7 @@ struct HostListView: View {
                     let parts = target.split(separator: ":")
                     var h = SavedHost(name: "Debug", address: String(parts[0]))
                     if parts.count > 1 { h.port = Int(parts[1]) ?? 5900 }
+                    h.homeAddress = ProcessInfo.processInfo.environment["SCREENLINK_HOME"]
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         SessionPresenter.present(h, password: ProcessInfo.processInfo.environment["SCREENLINK_PASSWORD"] ?? "")
                     }
@@ -154,6 +155,7 @@ private struct HostRow: View {
 
     private var subtitle: String {
         var parts = [host.port == 5900 ? host.address : "\(host.address):\(host.port)"]
+        if let home = host.home { parts[0] = "\(home) / \(parts[0])" }
         if online == false { parts.append("Not reachable") }
         else if let d = host.lastConnected {
             parts.append(d.formatted(.relative(presentation: .named)))

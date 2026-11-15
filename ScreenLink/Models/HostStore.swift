@@ -6,10 +6,19 @@ struct SavedHost: Codable, Identifiable, Hashable {
     var id = UUID()
     var name: String
     var address: String
+    /// Optional address on the home network (like 192.168.1.20). Tried first; `address`
+    /// (usually Tailscale) is used when it doesn't answer, e.g. away from home.
+    var homeAddress: String?
     var port: Int = 5900
     var username: String = ""
     var quality: StreamQuality = .lossless
     var lastConnected: Date?
+
+    /// The home address, trimmed, or nil if none is set.
+    var home: String? {
+        let h = (homeAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return h.isEmpty ? nil : h
+    }
 
     var icon: String {
         let n = (name + " " + address).lowercased()
@@ -82,13 +91,24 @@ final class HostStore: ObservableObject {
         for h in hosts { probe(h) }
     }
 
+    nonisolated static func probeEither(home: String?, addr: String, port: Int) -> Bool {
+        if let home {
+            let ok = TCPSocket.probe(host: home, port: port, timeout: 1.5)
+            ConnLog.write("probe home \(home):\(port) \(ok ? "reachable" : "NOT reachable")")
+            if ok { return true }
+        }
+        let ok = TCPSocket.probe(host: addr, port: port, timeout: 2.5)
+        ConnLog.write("probe \(addr):\(port) \(ok ? "reachable" : "NOT reachable")")
+        return ok
+    }
+
     func probe(_ host: SavedHost) {
         let addr = host.address.trimmingCharacters(in: .whitespaces)
+        let home = host.home
         let port = host.port
         let id = host.id
         Task.detached(priority: .utility) {
-            let ok = TCPSocket.probe(host: addr, port: port, timeout: 2.5)
-            ConnLog.write("probe \(addr):\(port) \(ok ? "reachable" : "NOT reachable")")
+            let ok = HostStore.probeEither(home: home, addr: addr, port: port)
             await MainActor.run { HostStore.shared.reachability[id] = ok }
         }
     }

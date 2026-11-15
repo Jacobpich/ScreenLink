@@ -132,7 +132,7 @@ func addressHelp() string {
 	var addr string
 	switch {
 	case ts != "" && cfg.AllowLAN && lan != "":
-		addr = fmt.Sprintf("  Address: %s  (anywhere, with Tailscale)\n       or: %s  (on this Wi-Fi, no Tailscale needed)", ts, lan)
+		addr = fmt.Sprintf("  Address: %s  (Tailscale, works anywhere)\n  Home Wi-Fi address: %s  (used at home, no Tailscale needed)", ts, lan)
 	case ts != "":
 		addr = fmt.Sprintf("  Address: %s  (or %s)", ts, strings.ToLower(host))
 	case cfg.AllowLAN && lan != "":
@@ -522,6 +522,9 @@ func showMenu() {
 		add(mfGrayed, 0, "Tailscale isn't running on this PC")
 	} else {
 		add(mfGrayed, 0, fmt.Sprintf("Connect ScreenLink to %s", ip))
+	}
+	if lan := lanIP(); ip != "" && ip != lan && lan != "" && appCfg != nil && appCfg.AllowLAN {
+		add(mfGrayed, 0, fmt.Sprintf("Home Wi-Fi address: %s", lan))
 	}
 	if trayViewers > 0 {
 		add(mfGrayed, 0, fmt.Sprintf("%d iPhone connected", trayViewers))

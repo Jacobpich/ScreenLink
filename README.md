@@ -14,13 +14,18 @@ ScreenLink can control a Windows PC too. The PC needs one small app, **ScreenLin
 2. Open **ScreenLinkReceiver.exe** from your Downloads folder.
    - If a blue "Windows protected your PC" box appears, click **More info → Run anyway**. (The app isn't signed, so Windows doesn't recognize it yet.)
 3. A setup window opens. Type a password, press Enter, then type it again.
-4. It asks whether iPhones on this Wi-Fi may connect without Tailscale. Type **y** for an at-home setup with no Tailscale, or **n** if you use Tailscale. Press Enter.
+4. It asks whether iPhones on this Wi-Fi may connect without Tailscale. Type **y** and press Enter (that's what lets it work at home even when Tailscale is off on the iPhone).
 5. Windows asks for permission. Click **Yes**.
-6. The window shows the address to use. On the iPhone, open ScreenLink, tap **+**, and enter that address, any username, and your password.
+6. The window shows two addresses. On the iPhone, open ScreenLink, tap **+ → Add Computer Manually**, and fill in:
+   - **Tailscale name or IP:** the `100.x.y.z` address (works anywhere, including away from home)
+   - **Home Wi-Fi address:** the `192.168.x.x` address (used automatically when you're home)
+   - Any username, and the password you chose.
+
+At home, ScreenLink connects straight over your Wi-Fi. Away from home, it switches to Tailscale on its own; just have Tailscale on in the iPhone's Tailscale app.
 
 That's it. The receiver starts when you sign in to the PC; its icon is by the clock. Right-click the icon to see the address again, change the password, or turn **Allow Devices on This Wi-Fi** on or off.
 
-**Tailscale or Wi-Fi?** With [Tailscale](https://tailscale.com/download/windows) on the PC (signed in to the same account as the iPhone), ScreenLink works from anywhere and the whole connection is encrypted. Without it, the iPhone must be on the same Wi-Fi. The password is still protected, but the screen picture isn't encrypted, so only use that on your home network.
+**Tailscale or Wi-Fi?** For access away from home, install [Tailscale](https://tailscale.com/download/windows) on the PC and sign in with the same account as the iPhone. Over Tailscale the whole connection is encrypted. On the home Wi-Fi, the password is still protected but the screen picture isn't encrypted, so only allow that on your home network. Without Tailscale on the PC, ScreenLink only works at home.
 
 More detail: [Receiver/README.md](Receiver/README.md).
 
@@ -33,6 +38,8 @@ Open `ScreenLink.xcodeproj` in Xcode (iOS 17+). Under **Signing & Capabilities**
 1. **System Settings → General → Sharing → Screen Sharing**: turn it on and make sure your user is allowed.
 2. Run **Tailscale** on the Mac and on the iPhone (same tailnet).
 3. In ScreenLink, add the Mac by its Tailscale name (`mac-studio`), MagicDNS name, or `100.x.y.z` address. Sign in with your Mac account's short name and password.
+
+Optional: also fill in **Home Wi-Fi address** (the computer's `192.168.x.x` address). ScreenLink tries it first, for 1.5 seconds, and uses the Tailscale address when it doesn't answer, so you're connected at home even with Tailscale off and away from home with it on.
 
 Optional: **Find on Tailscale** lists your tailnet's Macs using a Tailscale API access token (stored in the Keychain).
 

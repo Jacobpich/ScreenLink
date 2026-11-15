@@ -2,6 +2,8 @@ import Foundation
 
 struct ConnectionConfig {
     var host: String
+    /// Tried first with a short timeout; `host` is the fallback (see SavedHost.homeAddress).
+    var homeHost: String? = nil
     var port: Int
     var username: String
     var password: String
@@ -110,8 +112,21 @@ final class RFBConnection {
 
     private func run() {
         do {
-            ConnLog.write("connect \(config.host):\(config.port) user=\(config.username.isEmpty ? "-" : "set")")
-            try socket.connect(host: config.host, port: config.port, timeout: 10)
+            ConnLog.write("connect \(config.host):\(config.port) home=\(config.homeHost ?? "-") user=\(config.username.isEmpty ? "-" : "set")")
+            var viaHome = false
+            if let home = config.homeHost, home != config.host {
+                do {
+                    try socket.connect(host: home, port: config.port, timeout: 1.5)
+                    viaHome = true
+                    ConnLog.write("using home address \(home)")
+                } catch {
+                    ConnLog.write("home address \(home) didn't answer; using \(config.host)")
+                    if stopped { throw error }
+                }
+            }
+            if !viaHome {
+                try socket.connect(host: config.host, port: config.port, timeout: 10)
+            }
             try handshake()
             while !stopped {
                 try readServerMessage()
