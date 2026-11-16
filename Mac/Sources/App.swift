@@ -33,6 +33,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if parts.count > 1 { h.port = Int(parts[1]) ?? 5900 }
             h.homeAddress = env["SCREENLINK_HOME"]
             SessionController.open(h, password: env["SCREENLINK_PASSWORD"] ?? "")
+            if env["SCREENLINK_FULLSCREEN"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    NSApp.windows.first { $0.windowController is SessionController }?.toggleFullScreen(nil)
+                }
+                if env["SCREENLINK_FULLSCREEN"] == "2" { // in and back out again
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                        NSApp.windows.first { $0.windowController is SessionController }?.toggleFullScreen(nil)
+                    }
+                }
+            }
         }
         #endif
     }

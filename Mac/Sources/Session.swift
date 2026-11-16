@@ -706,6 +706,13 @@ final class SessionController: NSWindowController, NSWindowDelegate, RFBConnecti
         releaseAllKeys()
     }
 
+    /// Full screen looks like sitting at the other computer: the title bar and Displays button
+    /// stay hidden (they slide down with the menu bar if the pointer rests at the top edge) and
+    /// come back as normal when the window leaves full screen.
+    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions = []) -> NSApplication.PresentationOptions {
+        proposedOptions.union([.fullScreen, .autoHideMenuBar, .autoHideToolbar, .autoHideDock])
+    }
+
     func windowDidResize(_ notification: Notification) { layout() }
     func windowDidChangeBackingProperties(_ notification: Notification) { layout() }
 
