@@ -63,6 +63,7 @@ final class RFBConnection {
     private var outQueue: [UInt8] = []
     private var pendingMove: (x: UInt16, y: UInt16)?
     private var pendingScroll = (dx: 0, dy: 0)
+    private var scrollSent = 0, scrollDropped = 0          // guarded by `out`; for the stats line
     private var scrollAt: (x: UInt16, y: UInt16) = (0, 0)
     private var writerRunning = false
 
@@ -358,8 +359,18 @@ final class RFBConnection {
         let u = Double(max(1, st.updates))
         ConnLog.write(String(format: "stats %.1fs: %d updates (%.1f/s), %.1f rects and %.2f Mpx each, %.0f KB each, %.1f MB/s, wait %.0f ms, read+decode %.0f ms",
                              span, st.updates, Double(st.updates) / span, Double(st.rects) / u, Double(st.pixels) / u / 1e6,
-                             Double(st.bytes) / u / 1024, Double(st.bytes) / span / 1e6, st.wait / u * 1000, st.read / u * 1000))
+                             Double(st.bytes) / u / 1024, Double(st.bytes) / span / 1e6, st.wait / u * 1000, st.read / u * 1000)
+                     + scrollStatsLine(span))
         st = (now, 0, 0, 0, 0, 0, 0)
+    }
+
+    private func scrollStatsLine(_ span: Double) -> String {
+        out.lock()
+        let sent = scrollSent, dropped = scrollDropped
+        scrollSent = 0; scrollDropped = 0
+        out.unlock()
+        guard sent + dropped > 0 else { return "" }
+        return String(format: ", scroll %d notches (%.0f/s), %d dropped, ping %.0f ms", sent, Double(sent) / span, dropped, pingRTT * 1000)
     }
 
     private func readFramebufferUpdate() throws {
@@ -496,15 +507,23 @@ final class RFBConnection {
     // add to a queue, so neither can ever block on the network. Pointer motion is collapsed
     // to the latest position and scroll-wheel steps are paced, so a busy Mac is never flooded.
 
-    private static let maxScrollBacklog = 16               // notches; extra is dropped, not queued
+    // macOS moves only a few pixels per VNC wheel notch, so a normal trackpad swipe is dozens
+    // of notches. They go out in batches once per display frame: about a third of what's waiting
+    // each tick, so a swipe arrives within ~50 ms and still eases out smoothly. (The old pace of
+    // one notch per tick, with a 16-notch queue, cut swipes short and made scrolling crawl.)
+    private static let maxScrollBacklog = 64               // notches; extra is dropped, not queued
     // ScreenLink Receiver (Windows) handles input apart from the picture, so input never waits
     // behind a frame there: no ping gating, a deeper scroll queue, several notches per tick.
     private var scrollCap: Int { serverIsApple ? Self.maxScrollBacklog : 96 }
-    private var notchesPerTick: Int { serverIsApple ? 1 : 6 }
+    private func notchesThisTick(_ pending: Int) -> Int {
+        let n = abs(pending)
+        guard serverIsApple else { return min(n, 6) }
+        return min(n, max(1, (n + 2) / 3), 16)
+    }
     private static let inputInterval: TimeInterval = 0.004 // pointer/scroll paced to ≤ 250 updates/s
     private static let appleMoveInterval: TimeInterval = 1.0 / 60
     private static let minPingInterval: TimeInterval = 0.1
-    private static let appleScrollInterval: TimeInterval = 1.0 / 120
+    private static let appleScrollInterval: TimeInterval = 1.0 / 60
 
     private func startWriter() {
         out.lock(); writerRunning = true; out.unlock()
@@ -598,16 +617,18 @@ final class RFBConnection {
                 // Scrolling is what can flood a busy Mac (each notch is slow for it to handle), so it
                 // still waits for a ping when the Mac is behind; pings go out at most 10 times a second.
                 if pingOutstanding && now - pingSent > 1.0 { pingOutstanding = false }   // reply lost; carry on
-                let allowance = max(0.04, pingRTT * 2)
+                let allowance = max(0.08, pingRTT * 3)
                 let macIsBehind = serverIsApple && pingOutstanding && now - pingSent > allowance
                 if backlogLow && !macIsBehind {
                     let (sx, sy) = scrollAt
-                    for _ in 0..<notchesPerTick where pendingScroll.dy != 0 {
+                    let ny = notchesThisTick(pendingScroll.dy), nx = notchesThisTick(pendingScroll.dx)
+                    scrollSent += ny + nx
+                    for _ in 0..<ny {
                         let bit: UInt8 = pendingScroll.dy > 0 ? 16 : 8
                         batch += pointerMessage(sx, sy, buttonMask | bit) + pointerMessage(sx, sy, buttonMask)
                         pendingScroll.dy -= pendingScroll.dy.signum()
                     }
-                    for _ in 0..<notchesPerTick where pendingScroll.dx != 0 {
+                    for _ in 0..<nx {
                         let bit: UInt8 = pendingScroll.dx > 0 ? 64 : 32
                         batch += pointerMessage(sx, sy, buttonMask | bit) + pointerMessage(sx, sy, buttonMask)
                         pendingScroll.dx -= pendingScroll.dx.signum()
@@ -665,8 +686,10 @@ final class RFBConnection {
         // Changing direction cancels whatever was still queued the other way.
         if dy != 0 && pendingScroll.dy.signum() == -dy.signum() { pendingScroll.dy = 0 }
         if dx != 0 && pendingScroll.dx.signum() == -dx.signum() { pendingScroll.dx = 0 }
-        pendingScroll.dy = max(-cap, min(cap, pendingScroll.dy + dy))
-        pendingScroll.dx = max(-cap, min(cap, pendingScroll.dx + dx))
+        let wantY = pendingScroll.dy + dy, wantX = pendingScroll.dx + dx
+        pendingScroll.dy = max(-cap, min(cap, wantY))
+        pendingScroll.dx = max(-cap, min(cap, wantX))
+        scrollDropped += abs(wantY - pendingScroll.dy) + abs(wantX - pendingScroll.dx)
         out.signal()
         out.unlock()
     }
