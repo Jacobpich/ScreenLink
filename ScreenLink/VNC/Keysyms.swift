@@ -27,10 +27,23 @@ enum Keysym {
     static let superL: UInt32 = 0xFFEB
     static let space: UInt32 = 0x0020
 
-    /// The keysym the Mac treats as ⌘. Apple's server maps Meta_L to Command;
-    /// some setups prefer Super_L, so this is user-configurable.
-    static var command: UInt32 {
-        UserDefaults.standard.bool(forKey: "commandSendsSuper") ? superL : metaL
+    /// ⌘ inside the app. ScreenLink Receiver (Windows) reads Meta as ⌘ and turns ⌘C into Ctrl+C;
+    /// for a Mac it's swapped to the right keysym on the way out (see `forMac`).
+    static let command: UInt32 = metaL
+
+    /// macOS Screen Sharing (measured on macOS 27.2) reads Super_L and Alt_L as Command and
+    /// Meta_L as Option, so the classic VNC mapping (Meta = ⌘, Alt = ⌥) arrives with ⌘ and ⌥
+    /// swapped: ⌘A became ⌥A. This sends ⌘ as Super and ⌥ as Meta. The "classicMacModifiers"
+    /// setting turns it off for an older Mac that still uses the classic mapping.
+    static func forMac(_ sym: UInt32) -> UInt32 {
+        if UserDefaults.standard.bool(forKey: "classicMacModifiers") { return sym }
+        switch sym {
+        case metaL: return superL          // ⌘ left
+        case 0xFFE8: return 0xFFEC         // ⌘ right (Meta_R → Super_R)
+        case option: return metaL          // ⌥ left
+        case 0xFFEA: return 0xFFE8         // ⌥ right (Alt_R → Meta_R)
+        default: return sym
+        }
     }
 
     static func function(_ n: Int) -> UInt32 { f1 + UInt32(n - 1) }

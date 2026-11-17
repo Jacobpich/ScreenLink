@@ -38,7 +38,7 @@ enum MacKeyMap {
         case 58: return (Keysym.option, 0x20)
         case 61: return (0xFFEA, 0x40)
         case 55: return (Keysym.command, 0x8)
-        case 54: return (Keysym.command == Keysym.metaL ? 0xFFE8 : 0xFFEC, 0x10)
+        case 54: return (0xFFE8, 0x10)   // right ⌘ (Meta_R; sent to a Mac as Super_R)
         default: return nil
         }
     }

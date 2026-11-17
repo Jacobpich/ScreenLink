@@ -10,7 +10,7 @@ struct SettingsView: View {
     @AppStorage("syncClipboard") private var syncClipboard = true
     @AppStorage("autoKeyboard") private var autoKeyboard = true
     @AppStorage("showStats") private var showStats = false
-    @AppStorage("commandSendsSuper") private var commandSendsSuper = false
+    @AppStorage("classicMacModifiers") private var classicMacModifiers = false
 
     var body: some View {
         NavigationStack {
@@ -52,15 +52,15 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Picker("⌘ key sends", selection: $commandSendsSuper) {
-                        Text("Meta (default)").tag(false)
-                        Text("Super").tag(true)
+                    Picker("⌘ and ⌥ keys", selection: $classicMacModifiers) {
+                        Text("Current macOS (default)").tag(false)
+                        Text("Older macOS").tag(true)
                     }
                     Toggle("Show connection stats", isOn: $showStats)
                 } header: {
                     Text("Advanced")
                 } footer: {
-                    Text("If ⌘ shortcuts don't work on your Mac, try switching the ⌘ key to Super.")
+                    Text("If ⌘C or ⌘A acts like Option on your Mac (types ç or å), switch ⌘ and ⌥ keys to the other choice.")
                 }
 
                 Section("Point & click") {

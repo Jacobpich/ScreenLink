@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// The Computer menu: shortcuts macOS would otherwise keep for itself (⌘Tab, ⌘Space…).
 struct ComputerCommands: Commands {
+    @AppStorage("classicMacModifiers") private var classicMacModifiers = false
     private func send(_ key: UInt32, _ mods: [UInt32] = []) {
         SessionController.current?.sendShortcut(key, modifiers: mods)
     }
@@ -87,6 +88,8 @@ struct ComputerCommands: Commands {
                 Button("App Switcher") { send(Keysym.tab, [Keysym.command]) }
                 Button("Force Quit…") { send(Keysym.escape, [Keysym.command, Keysym.option]) }
             }
+            Divider()
+            Toggle("Older Mac: Classic ⌘ and ⌥ Keys", isOn: $classicMacModifiers)
             Divider()
             Button("Paste My Clipboard as Typing") { SessionController.current?.typeClipboard() }
             Button("Refresh Screen") { SessionController.current?.connection?.refresh() }

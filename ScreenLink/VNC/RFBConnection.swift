@@ -696,7 +696,7 @@ final class RFBConnection {
 
     func key(_ keysym: UInt32, down: Bool) {
         var m: [UInt8] = [4, down ? 1 : 0, 0, 0]
-        m.appendU32(keysym)
+        m.appendU32(serverIsApple ? Keysym.forMac(keysym) : keysym)
         enqueue(m)
     }
 

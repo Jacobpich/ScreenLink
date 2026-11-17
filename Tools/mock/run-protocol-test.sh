@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 V=../../ScreenLink/VNC
 T=$(mktemp -d)
-xcrun swiftc -O -o $T/harness main.swift $V/Socket.swift $V/Auth.swift $V/ZStream.swift $V/Framebuffer.swift $V/Decoders.swift $V/RFBConnection.swift ../../ScreenLink/Models/ConnLog.swift 2>/dev/null
+xcrun swiftc -O -o $T/harness main.swift $V/Socket.swift $V/Auth.swift $V/ZStream.swift $V/Framebuffer.swift $V/Decoders.swift $V/RFBConnection.swift $V/Keysyms.swift ../../ScreenLink/Models/ConnLog.swift 2>/dev/null
 python3 server.py $T/port $T/expected.bin > $T/server.log 2>&1 &
 while [ ! -f $T/port ]; do sleep 0.1; done
 $T/harness $(cat $T/port) $T/actual.bin 41
